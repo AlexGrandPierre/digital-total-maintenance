@@ -15,7 +15,8 @@
   "dependencies": {
     "electron-squirrel-startup": "^1.0.1",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "scheduler": "^0.26.0"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.8.1",
@@ -28,6 +29,7 @@
     "@electron-forge/plugin-webpack": "^7.8.1",
     "@electron/fuses": "^1.8.0",
     "@eslint/js": "^9.29.0",
+    "@tailwindcss/postcss": "^4.1.11",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.5.2",
