@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "start": "electron electron/electron-entry.cjs",
+    "start": "electron electron/electron-entry.js",
     "package": "electron-forge package",
     "make": "electron-forge make"
   },
