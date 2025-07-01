@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "start": "electron electron/electron-entry.js",
+    "start": "electron electron/electron-entry.cjs",
     "package": "electron-forge package",
     "make": "electron-forge make"
   },
@@ -16,7 +16,8 @@
     "electron-squirrel-startup": "^1.0.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "scheduler": "^0.26.0"
+    "scheduler": "^0.26.0",
+    "unzipper": "^0.12.3"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.8.1",
