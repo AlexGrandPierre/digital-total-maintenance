@@ -1,7 +1,0 @@
-{
-  "name": "Local File Scanner",
-  "description": "Scans user folders and classifies files by type and metadata.",
-  "version": "0.1.0",
-  "output": "scan-report.json",
-  "author": "DTM System"
-}

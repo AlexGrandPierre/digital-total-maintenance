@@ -1,69 +1,35 @@
-import { useEffect, useState } from 'react';
-import reactLogo from './assets/react.svg';
-import viteLogo from '/vite.svg';
+import { useState } from 'react';
 import './App.css';
 
-type ExtractionEvent = {
-  original: string;
-  extractedTo: string;
-  timestamp: string;
-};
-
 function App() {
-  const [count, setCount] = useState(0);
-  const [extractions, setExtractions] = useState<ExtractionEvent[]>([]);
   const [scanOutput, setScanOutput] = useState<string | null>(null);
 
-  useEffect(() => {
-    window.electronAPI?.receive?.('zip-extracted', (event: ExtractionEvent) => {
-      setExtractions(prev => [event, ...prev]);
-    });
-
-    window.electronAPI?.onScanFinished?.((data) => {
-      setScanOutput(data.output || 'Scan completed with no output.');
-    });
-  }, []);
+  const handleScan = async () => {
+    const result = await window.electronAPI?.scanDesktop?.();
+    if (result) {
+      setScanOutput(result.output || 'Scan completed with no output.');
+    }
+  };
 
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
+    <div className="p-8 text-center">
+      <h1 className="text-4xl font-bold mb-2">Digital Total Maintenance</h1>
+      <p className="text-lg text-gray-600 mb-6">One-click scan of your local desktop workspace.</p>
 
-      <h1 className="text-3xl font-bold text-blue-600">Hello fucker</h1>
+      <button
+        onClick={handleScan}
+        className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded shadow"
+      >
+        🧹 Scan Desktop
+      </button>
 
-      <div className="card">
-        <button onClick={() => setCount(count + 1)}>count is {count}</button>
-        <p>Edit <code>src/App.tsx</code> and save to test HMR</p>
-      </div>
-
-      <div className="mt-6">
-        <h2 className="text-xl font-semibold text-gray-800">📦 Extracted ZIPs</h2>
-        <ul className="mt-2 space-y-1 text-sm">
-          {extractions.length === 0 ? (
-            <li className="text-gray-500">No ZIPs extracted yet.</li>
-          ) : (
-            extractions.map((e, i) => (
-              <li key={i} className="text-gray-700">
-                <strong>{e.original}</strong> → <code>{e.extractedTo}</code> @ <em>{e.timestamp}</em>
-              </li>
-            ))
-          )}
-        </ul>
-      </div>
-
-      <div className="mt-6">
-        <h2 className="text-xl font-semibold text-green-700">🧠 Scan Output</h2>
-        <pre className="mt-2 p-2 bg-gray-100 text-sm overflow-x-auto whitespace-pre-wrap">
+      <div className="mt-10">
+        <h2 className="text-2xl font-semibold text-gray-800 mb-2">📊 Scan Output</h2>
+        <pre className="text-left bg-gray-100 p-4 rounded whitespace-pre-wrap overflow-x-auto">
           {scanOutput || 'No scan yet.'}
         </pre>
       </div>
-    </>
+    </div>
   );
 }
 
