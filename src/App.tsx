@@ -4,9 +4,18 @@ import ScanButton from './components/ScanButton';
 
 type ScanMode = 'test' | 'desktop';
 
-type SuspiciousFile = {
+type ClassifiedFile = {
   path: string;
   name: string;
+  ext: string;
+  size: number;
+  age_days: number;
+  hash: string | null;
+  category: string;
+  confidence: 'high' | 'medium' | 'low';
+  recommended_action: 'keep' | 'ignore' | 'review' | 'archive' | 'remove';
+  reason: string;
+  ui_visibility: 'normal' | 'hidden_by_default';
 };
 
 type ScanResult = {
@@ -14,7 +23,10 @@ type ScanResult = {
   folder: string;
   mode: string;
   total_files: number;
-  suspicious_files: SuspiciousFile[];
+  review_files: ClassifiedFile[];
+  system_files: ClassifiedFile[];
+  archive_candidates: ClassifiedFile[];
+  remove_candidates: ClassifiedFile[];
   duplicates: string[][];
   age_buckets: Record<string, number>;
   by_ext: Record<string, number>;
@@ -126,6 +138,12 @@ function App() {
   const [scanData, setScanData] = useState<ScanResult | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [scanMode, setScanMode] = useState<ScanMode>('test');
+  const [showSystemFiles, setShowSystemFiles] = useState(false);
+  const [actionStatus, setActionStatus] = useState<{
+    tone: 'success' | 'error';
+    message: string;
+  } | null>(null);
+  const [busyPath, setBusyPath] = useState<string | null>(null);
 
   useEffect(() => {
     window.electronAPI?.onScanFinished?.((data: { output?: string }) => {
@@ -145,12 +163,108 @@ function App() {
   const handleScan = () => {
     setIsScanning(true);
     setScanData(null);
+    setActionStatus(null);
     setScanOutput(
       scanMode === 'desktop'
         ? 'Scanning Desktop... Please wait.'
         : 'Scanning test folder... Please wait.'
     );
     window.electronAPI?.sendScanRequest?.(scanMode);
+  };
+
+  const handleMoveToReview = async (filePath: string) => {
+    setBusyPath(filePath);
+    setActionStatus(null);
+
+    try {
+      const result = await window.electronAPI?.moveToReview?.(filePath);
+
+      if (result?.success) {
+        setActionStatus({
+          tone: 'success',
+          message: result.destination
+            ? `Moved to DTM Review: ${result.destination}`
+            : result.message,
+        });
+
+        // Refresh current scan after action
+        window.electronAPI?.sendScanRequest?.(scanMode);
+      } else {
+        setActionStatus({
+          tone: 'error',
+          message: result?.message || 'Failed to move file to DTM Review.',
+        });
+      }
+    } catch (error) {
+      setActionStatus({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Unexpected action failure.',
+      });
+    } finally {
+      setBusyPath(null);
+    }
+  };
+
+  const handleMoveToArchive = async (filePath: string) => {
+    setBusyPath(filePath);
+    setActionStatus(null);
+
+    try {
+      const result = await window.electronAPI?.moveToArchive?.(filePath);
+
+      if (result?.success) {
+        setActionStatus({
+          tone: 'success',
+          message: result.destination
+            ? `Moved to DTM Archive: ${result.destination}`
+            : result.message,
+        });
+        window.electronAPI?.sendScanRequest?.(scanMode);
+      } else {
+        setActionStatus({
+          tone: 'error',
+          message: result?.message || 'Failed to move file to DTM Archive.',
+        });
+      }
+    } catch (error) {
+      setActionStatus({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Unexpected archive action failure.',
+      });
+    } finally {
+      setBusyPath(null);
+    }
+  };
+
+  const handleMoveToTrash = async (filePath: string) => {
+    setBusyPath(filePath);
+    setActionStatus(null);
+
+    try {
+      const result = await window.electronAPI?.moveToTrash?.(filePath);
+
+      if (result?.success) {
+        setActionStatus({
+          tone: 'success',
+          message: result.destination
+            ? `Moved to Trash: ${result.destination}`
+            : result.message,
+        });
+        window.electronAPI?.sendScanRequest?.(scanMode);
+      } else {
+        setActionStatus({
+          tone: 'error',
+          message: result?.message || 'Failed to move file to Trash.',
+        });
+      }
+    } catch (error) {
+      setActionStatus({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Unexpected remove action failure.',
+      });
+    } finally {
+      setBusyPath(null);
+    }
   };
 
   const topExtensions = useMemo(() => {
@@ -166,7 +280,9 @@ function App() {
   const reviewSummary = useMemo(() => {
     if (!scanData) return [];
     return [
-      ['Suspicious files', scanData.suspicious_files.length],
+      ['Needs review', scanData.review_files.length],
+      ['Archive candidates', scanData.archive_candidates.length],
+      ['Remove candidates', scanData.remove_candidates.length],
       ['Duplicate pairs', scanData.duplicates.length],
       ['Folder scanned', scanData.folder],
       ['Mode', scanData.mode],
@@ -213,6 +329,35 @@ function App() {
             </div>
           </div>
 
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowSystemFiles((prev) => !prev)}
+              className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                showSystemFiles
+                  ? 'bg-slate-900 text-white shadow-sm'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              {showSystemFiles ? 'Hide System Files' : 'Show System Files'}
+            </button>
+
+            <span className="text-sm text-slate-500">
+              {scanData ? `${scanData.system_files.length} system files available` : 'System files hidden by default'}
+            </span>
+          </div>
+
+          {actionStatus ? (
+            <section
+              className={`rounded-2xl border px-5 py-4 shadow-sm ${
+                actionStatus.tone === 'success'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                  : 'border-rose-200 bg-rose-50 text-rose-900'
+              }`}
+            >
+              <p className="text-sm font-medium">{actionStatus.message}</p>
+            </section>
+          ) : null}
+
           {isScanning ? (
             <section className="rounded-[2rem] border border-sky-200 bg-sky-50 p-6 shadow-sm">
               <div className="flex items-start gap-4">
@@ -234,9 +379,9 @@ function App() {
               <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <StatCard label="Total files" value={scanData.total_files} tone="neutral" />
                 <StatCard
-                  label="Suspicious files"
-                  value={scanData.suspicious_files.length}
-                  tone={scanData.suspicious_files.length > 0 ? 'warn' : 'good'}
+                  label="Needs review"
+                  value={scanData.review_files.length}
+                  tone={scanData.review_files.length > 0 ? 'warn' : 'good'}
                 />
                 <StatCard
                   label="Duplicates"
@@ -284,16 +429,16 @@ function App() {
 
               <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
                 <SectionCard
-                  title="Suspicious Files"
-                  subtitle="Files flagged by extension or naming pattern for extra review."
+                  title="Needs Review"
+                  subtitle="Files that need human judgment before DTM can confidently relocate or remove them."
                 >
-                  {scanData.suspicious_files.length === 0 ? (
+                  {scanData.review_files.length === 0 ? (
                     <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
                       No suspicious files detected in this scan.
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      {scanData.suspicious_files.slice(0, 10).map((file) => (
+                      {scanData.review_files.slice(0, 10).map((file) => (
                         <div
                           key={file.path}
                           className="flex items-start gap-4 rounded-3xl border border-amber-200 bg-amber-50 p-4"
@@ -303,12 +448,39 @@ function App() {
                             <div className="flex flex-wrap items-center gap-2">
                               <h3 className="text-sm font-semibold text-amber-950">{file.name}</h3>
                               <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200">
-                                Review
+                                {file.category.replace(/_/g, ' ')}
                               </span>
                             </div>
+                        
                             <p className="mt-2 break-all text-xs leading-5 text-amber-900/80">
                               {file.path}
                             </p>
+                        
+                            <div className="mt-3 rounded-2xl bg-white/60 px-3 py-3 space-y-2">
+                              <div className="text-xs text-amber-900/80">
+                                <span className="font-semibold">Reason:</span> {file.reason}
+                              </div>
+                              <div className="text-xs text-amber-900/70">
+                                <span className="font-semibold">Confidence:</span> {file.confidence}
+                              </div>
+                              <div className="text-xs text-amber-900/70">
+                                <span className="font-semibold">Recommended action:</span> {file.recommended_action}
+                              </div>
+                            </div>
+                        
+                            <div className="mt-4 flex flex-wrap gap-3">
+                              <button
+                                onClick={() => handleMoveToReview(file.path)}
+                                disabled={busyPath === file.path}
+                                className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
+                                  busyPath === file.path
+                                    ? 'cursor-not-allowed bg-slate-200 text-slate-500'
+                                    : 'bg-slate-900 text-white hover:bg-slate-700'
+                                }`}
+                              >
+                                {busyPath === file.path ? 'Moving…' : 'Move to Review'}
+                              </button>
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -361,6 +533,163 @@ function App() {
                   )}
                 </SectionCard>
               </section>
+
+              <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+                <SectionCard
+                  title="Archive Candidates"
+                  subtitle="Files that are likely worth keeping, but not keeping in your active workspace."
+                >
+                  {scanData.archive_candidates.length === 0 ? (
+                    <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
+                      No archive candidates detected in this scan.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {scanData.archive_candidates.slice(0, 10).map((file) => (
+                        <div
+                          key={file.path}
+                          className="flex items-start gap-4 rounded-3xl border border-sky-200 bg-sky-50 p-4"
+                        >
+                          <FileBadge filename={file.name} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="text-sm font-semibold text-sky-950">{file.name}</h3>
+                              <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-sky-800 ring-1 ring-sky-200">
+                                {file.category.replace(/_/g, ' ')}
+                              </span>
+                            </div>
+                        
+                            <p className="mt-2 break-all text-xs leading-5 text-sky-900/80">
+                              {file.path}
+                            </p>
+                        
+                            <div className="mt-3 rounded-2xl bg-white/60 px-3 py-3 space-y-2">
+                              <div className="text-xs text-sky-900/80">
+                                <span className="font-semibold">Reason:</span> {file.reason}
+                              </div>
+                              <div className="text-xs text-sky-900/70">
+                                <span className="font-semibold">Confidence:</span> {file.confidence}
+                              </div>
+                              <div className="text-xs text-sky-900/70">
+                                <span className="font-semibold">Recommended action:</span> {file.recommended_action}
+                              </div>
+                            </div>
+                        
+                            <div className="mt-4 flex flex-wrap gap-3">
+                              <button
+                                onClick={() => handleMoveToArchive(file.path)}
+                                disabled={busyPath === file.path}
+                                className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
+                                  busyPath === file.path
+                                    ? 'cursor-not-allowed bg-slate-200 text-slate-500'
+                                    : 'bg-sky-900 text-white hover:bg-sky-700'
+                                }`}
+                              >
+                                {busyPath === file.path ? 'Archiving…' : 'Move to Archive'}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </SectionCard>
+
+                <SectionCard
+                  title="Remove Candidates"
+                  subtitle="Files that appear disposable, temporary, or low-value based on current rules."
+                >
+                  {scanData.remove_candidates.length === 0 ? (
+                    <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
+                      No remove candidates detected in this scan.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {scanData.remove_candidates.slice(0, 10).map((file) => (
+                        <div
+                          key={file.path}
+                          className="flex items-start gap-4 rounded-3xl border border-rose-200 bg-rose-50 p-4"
+                        >
+                          <FileBadge filename={file.name} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="text-sm font-semibold text-rose-950">{file.name}</h3>
+                              <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-rose-800 ring-1 ring-rose-200">
+                                {file.category.replace(/_/g, ' ')}
+                              </span>
+                            </div>
+                        
+                            <p className="mt-2 break-all text-xs leading-5 text-rose-900/80">
+                              {file.path}
+                            </p>
+                        
+                            <div className="mt-3 rounded-2xl bg-white/60 px-3 py-3 space-y-2">
+                              <div className="text-xs text-rose-900/80">
+                                <span className="font-semibold">Reason:</span> {file.reason}
+                              </div>
+                              <div className="text-xs text-rose-900/70">
+                                <span className="font-semibold">Confidence:</span> {file.confidence}
+                              </div>
+                              <div className="text-xs text-rose-900/70">
+                                <span className="font-semibold">Recommended action:</span> {file.recommended_action}
+                              </div>
+                            </div>
+                        
+                            <div className="mt-4 flex flex-wrap gap-3">
+                              <button
+                                onClick={() => handleMoveToTrash(file.path)}
+                                disabled={busyPath === file.path}
+                                className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
+                                  busyPath === file.path
+                                    ? 'cursor-not-allowed bg-slate-200 text-slate-500'
+                                    : 'bg-rose-900 text-white hover:bg-rose-700'
+                                }`}
+                              >
+                                {busyPath === file.path ? 'Removing…' : 'Move to Trash'}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </SectionCard>
+              </section>
+
+              {showSystemFiles ? (
+                <SectionCard
+                  title="System Files"
+                  subtitle="Files generated by the operating system or tooling, usually safe to ignore."
+                >
+                  {scanData.system_files.length === 0 ? (
+                    <p className="text-sm text-slate-500">No system files detected in this scan.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {scanData.system_files.slice(0, 10).map((file) => (
+                        <div
+                          key={file.path}
+                          className="flex items-start gap-4 rounded-3xl border border-slate-200 bg-slate-50 p-4"
+                        >
+                          <FileBadge filename={file.name} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="text-sm font-semibold text-slate-900">{file.name}</h3>
+                              <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 ring-1 ring-slate-200">
+                                {file.category.replace(/_/g, ' ')}
+                              </span>
+                            </div>
+                            <p className="mt-2 break-all text-xs leading-5 text-slate-700">{file.path}</p>
+
+                            <div className="mt-3 text-xs text-slate-600">
+                              <span className="font-semibold">Reason:</span> {file.reason}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </SectionCard>
+              ) : null}
 
               <SectionCard
                 title="Debug Output"
