@@ -1,6 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  scanDesktop: () => ipcRenderer.invoke('scan-desktop')
+  sendScanRequest: (mode = 'test') => ipcRenderer.send('scan-desktop', { mode }),
+  onScanFinished: (callback) => ipcRenderer.on('scan-finished', (_event, data) => callback(data)),
 });
-

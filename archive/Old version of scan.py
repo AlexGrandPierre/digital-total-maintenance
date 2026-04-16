@@ -38,7 +38,7 @@ def walk_desktop():
                 age = get_age_days(mtime)
                 ext = os.path.splitext(file)[1].lower() or "no_ext"
                 is_sus = is_suspicious(file)
-                file_hash = hash_file(full_path)
+                file_hash = None #hash_file(full_path)
 
                 entry = {
                     "name": file,
