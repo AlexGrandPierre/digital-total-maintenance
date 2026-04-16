@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Header from './components/Header';
 import ScanButton from './components/ScanButton';
 
-type ScanMode = 'test' | 'desktop';
+type ScanPreset = 'test' | 'desktop' | 'downloads' | 'documents' | 'custom';
 
 type ClassifiedFile = {
   path: string;
@@ -137,7 +137,8 @@ function App() {
   const [scanOutput, setScanOutput] = useState<string>('No scan yet.');
   const [scanData, setScanData] = useState<ScanResult | null>(null);
   const [isScanning, setIsScanning] = useState(false);
-  const [scanMode, setScanMode] = useState<ScanMode>('test');
+  const [scanPreset, setScanPreset] = useState<ScanPreset>('test');
+  const [customPath, setCustomPath] = useState('');
   const [showSystemFiles, setShowSystemFiles] = useState(false);
   const [actionStatus, setActionStatus] = useState<{
     tone: 'success' | 'error';
@@ -160,16 +161,40 @@ function App() {
     });
   }, []);
 
+  const scanTargetLabel = useMemo(() => {
+    switch (scanPreset) {
+      case 'desktop':
+        return 'Desktop';
+      case 'downloads':
+        return 'Downloads';
+      case 'documents':
+        return 'Documents';
+      case 'custom':
+        return 'Custom Folder';
+      case 'test':
+      default:
+        return 'Test Folder';
+    }
+  }, [scanPreset]);
+
   const handleScan = () => {
+    if (scanPreset === 'custom' && !customPath.trim()) {
+      setActionStatus({
+        tone: 'error',
+        message: 'Please enter a folder path before scanning a custom location.',
+      });
+      return;
+    }
+
     setIsScanning(true);
     setScanData(null);
     setActionStatus(null);
-    setScanOutput(
-      scanMode === 'desktop'
-        ? 'Scanning Desktop... Please wait.'
-        : 'Scanning test folder... Please wait.'
-    );
-    window.electronAPI?.sendScanRequest?.(scanMode);
+    setScanOutput(`Scanning ${scanTargetLabel}... Please wait.`);
+
+    window.electronAPI?.sendScanRequest?.({
+      preset: scanPreset,
+      customPath: customPath.trim(),
+    });
   };
 
   const handleMoveToReview = async (filePath: string) => {
@@ -188,7 +213,10 @@ function App() {
         });
 
         // Refresh current scan after action
-        window.electronAPI?.sendScanRequest?.(scanMode);
+        window.electronAPI?.sendScanRequest?.({
+          preset: scanPreset,
+          customPath: customPath.trim(),
+        });
       } else {
         setActionStatus({
           tone: 'error',
@@ -219,7 +247,10 @@ function App() {
             ? `Moved to DTM Archive: ${result.destination}`
             : result.message,
         });
-        window.electronAPI?.sendScanRequest?.(scanMode);
+        window.electronAPI?.sendScanRequest?.({
+          preset: scanPreset,
+          customPath: customPath.trim(),
+        });
       } else {
         setActionStatus({
           tone: 'error',
@@ -250,7 +281,10 @@ function App() {
             ? `Moved to Trash: ${result.destination}`
             : result.message,
         });
-        window.electronAPI?.sendScanRequest?.(scanMode);
+        window.electronAPI?.sendScanRequest?.({
+          preset: scanPreset,
+          customPath: customPath.trim(),
+        });
       } else {
         setActionStatus({
           tone: 'error',
@@ -266,6 +300,33 @@ function App() {
       setBusyPath(null);
     }
   };
+
+  const insights = useMemo(() => {
+    if (!scanData) return null;
+  
+    const review = scanData.review_files.length;
+    const archive = scanData.archive_candidates.length;
+    const remove = scanData.remove_candidates.length;
+    const oldFiles = scanData.age_buckets['>180d'] || 0;
+  
+    let summary = '';
+  
+    if (review > 10000) {
+      summary = 'Your workspace is heavily cluttered.';
+    } else if (review > 1000) {
+      summary = 'Your workspace is moderately cluttered.';
+    } else {
+      summary = 'Your workspace is relatively clean.';
+    }
+  
+    return {
+      summary,
+      review,
+      archive,
+      remove,
+      oldFiles,
+    };
+  }, [scanData]);
 
   const topExtensions = useMemo(() => {
     if (!scanData) return [];
@@ -302,48 +363,89 @@ function App() {
                   Scan Scope
                 </p>
                 <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
-                  Choose a target and iterate quickly
+                  Choose a target and explore your file landscape
                 </h2>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
-                  Use the test folder for rapid UI and logic development. Switch to Desktop when
-                  you want broader real-world validation.
+                  Start with a familiar high-impact location, or enter a custom folder path to inspect
+                  a different part of your computer.
                 </p>
               </div>
 
               <div className="flex shrink-0 items-center">
-                <ScanButton onClick={handleScan} isScanning={isScanning} />
+                <ScanButton
+                  onClick={handleScan}
+                  isScanning={isScanning}
+                  label={`Scan ${scanTargetLabel}`}
+                />
               </div>
             </div>
 
             <div className="flex flex-wrap gap-3">
               <ModePill
-                active={scanMode === 'test'}
+                active={scanPreset === 'test'}
                 label="Test Folder"
-                onClick={() => setScanMode('test')}
+                onClick={() => setScanPreset('test')}
               />
               <ModePill
-                active={scanMode === 'desktop'}
+                active={scanPreset === 'desktop'}
                 label="Desktop"
-                onClick={() => setScanMode('desktop')}
+                onClick={() => setScanPreset('desktop')}
+              />
+              <ModePill
+                active={scanPreset === 'downloads'}
+                label="Downloads"
+                onClick={() => setScanPreset('downloads')}
+              />
+              <ModePill
+                active={scanPreset === 'documents'}
+                label="Documents"
+                onClick={() => setScanPreset('documents')}
+              />
+              <ModePill
+                active={scanPreset === 'custom'}
+                label="Custom"
+                onClick={() => setScanPreset('custom')}
               />
             </div>
-          </div>
 
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setShowSystemFiles((prev) => !prev)}
-              className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                showSystemFiles
-                  ? 'bg-slate-900 text-white shadow-sm'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}
-            >
-              {showSystemFiles ? 'Hide System Files' : 'Show System Files'}
-            </button>
+            {scanPreset === 'custom' ? (
+              <div className="flex flex-col gap-2">
+                <label
+                  htmlFor="custom-path"
+                  className="text-sm font-medium text-slate-700"
+                >
+                  Custom folder path
+                </label>
+                <input
+                  id="custom-path"
+                  type="text"
+                  value={customPath}
+                  onChange={(e) => setCustomPath(e.target.value)}
+                  placeholder="/Users/yourname/Documents/example-folder"
+                  className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
+                />
+                <p className="text-xs text-slate-500">
+                  Enter an absolute folder path on this computer.
+                </p>
+              </div>
+            ) : null}
 
-            <span className="text-sm text-slate-500">
-              {scanData ? `${scanData.system_files.length} system files available` : 'System files hidden by default'}
-            </span>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setShowSystemFiles((prev) => !prev)}
+                className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                  showSystemFiles
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {showSystemFiles ? 'Hide System Files' : 'Show System Files'}
+              </button>
+
+              <span className="text-sm text-slate-500">
+                {scanData ? `${scanData.system_files.length} system files available` : 'System files hidden by default'}
+              </span>
+            </div>
           </div>
 
           {actionStatus ? (
@@ -365,8 +467,14 @@ function App() {
                 <div>
                   <h3 className="text-lg font-semibold text-sky-900">Scanning in progress</h3>
                   <p className="mt-1 text-sm leading-6 text-sky-800">
-                    {scanMode === 'desktop'
+                    {scanPreset === 'desktop'
                       ? 'Running a broader Desktop scan. This may take longer depending on file volume.'
+                      : scanPreset === 'downloads'
+                      ? 'Scanning Downloads for clutter, archives, and disposable files.'
+                      : scanPreset === 'documents'
+                      ? 'Scanning Documents for files that may need review, archive, or cleanup.'
+                      : scanPreset === 'custom'
+                      ? `Scanning custom folder: ${customPath || 'No path provided'}`
                       : 'Running a fast development scan on your test folder.'}
                   </p>
                 </div>
@@ -376,6 +484,31 @@ function App() {
 
           {scanData ? (
             <>
+              {insights && (
+                <SectionCard
+                  title="DTM Insights"
+                  subtitle="High-level interpretation of your current digital environment."
+                >
+                  <div className="space-y-3 text-sm text-slate-700">
+                    <p className="font-medium text-slate-900">{insights.summary}</p>
+
+                    <ul className="space-y-1">
+                      <li>• {insights.review} files need review</li>
+                      <li>• {insights.archive} files can likely be archived</li>
+                      <li>• {insights.remove} files appear safe to remove</li>
+                    </ul>
+
+                    <p>
+                      Most files have not been modified in over 180 days: {insights.oldFiles}
+                    </p>
+
+                    <p className="text-slate-600">
+                      Recommendation: Start by reviewing unknown files, then archive older compressed files.
+                    </p>
+                  </div>
+                </SectionCard>
+              )}
+              
               <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <StatCard label="Total files" value={scanData.total_files} tone="neutral" />
                 <StatCard

@@ -1,9 +1,10 @@
 type Props = {
   onClick: () => void;
   isScanning?: boolean;
+  label?: string;
 };
 
-function ScanButton({ onClick, isScanning = false }: Props) {
+function ScanButton({ onClick, isScanning = false, label = 'Scan Folder' }: Props) {
   return (
     <button
       onClick={onClick}
@@ -14,7 +15,7 @@ function ScanButton({ onClick, isScanning = false }: Props) {
           : 'bg-rose-500 text-white hover:bg-rose-600 active:scale-[0.99]'
       }`}
     >
-      {isScanning ? 'Scanning…' : 'Scan Test Folder'}
+      {isScanning ? 'Scanning…' : label}
     </button>
   );
 }

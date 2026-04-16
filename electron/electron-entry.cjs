@@ -54,13 +54,30 @@ app.whenReady().then(() => {
   createWindow();
 
   ipcMain.on('scan-desktop', async (event, payload = {}) => {
-    const mode = payload.mode || 'test';
+    const preset = payload.preset || 'test';
+    const customPath = (payload.customPath || '').trim();
     const scanPath = path.join(__dirname, '..', 'modules', 'scan.py');
 
-    const targetPath =
-      mode === 'desktop'
-        ? path.join(os.homedir(), 'Desktop')
-        : path.join(os.homedir(), 'Desktop', 'dtm-test-folder');
+    let targetPath;
+
+    switch (preset) {
+      case 'desktop':
+        targetPath = path.join(os.homedir(), 'Desktop');
+        break;
+      case 'downloads':
+        targetPath = path.join(os.homedir(), 'Downloads');
+        break;
+      case 'documents':
+        targetPath = path.join(os.homedir(), 'Documents');
+        break;
+      case 'custom':
+        targetPath = customPath;
+        break;
+      case 'test':
+      default:
+        targetPath = path.join(os.homedir(), 'Desktop', 'dtm-test-folder');
+        break;
+    }
 
     const result = await runPythonScript(scanPath, [targetPath]);
 

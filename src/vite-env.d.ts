@@ -1,6 +1,11 @@
 /// <reference types="vite/client" />
 
-type ScanMode = 'test' | 'desktop';
+type ScanPreset = 'test' | 'desktop' | 'downloads' | 'documents' | 'custom';
+
+type ScanRequestPayload = {
+  preset: ScanPreset;
+  customPath?: string;
+};
 
 type ActionResult = {
   success: boolean;
@@ -11,7 +16,7 @@ type ActionResult = {
 };
 
 interface ElectronAPI {
-  sendScanRequest?: (mode?: ScanMode) => void;
+  sendScanRequest?: (payload: ScanRequestPayload) => void;
   onScanFinished?: (callback: (data: { output?: string }) => void) => void;
   moveToReview?: (filePath: string) => Promise<ActionResult>;
   moveToArchive?: (filePath: string) => Promise<ActionResult>;
