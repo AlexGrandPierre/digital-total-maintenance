@@ -8,4 +8,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   moveToReview: (filePath) => ipcRenderer.invoke('move-to-review', { filePath }),
   moveToArchive: (filePath) => ipcRenderer.invoke('move-to-archive', { filePath }),
   moveToTrash: (filePath) => ipcRenderer.invoke('move-to-trash', { filePath }),
+
+  browseForFolder: () => ipcRenderer.invoke('browse-for-folder'),
 });

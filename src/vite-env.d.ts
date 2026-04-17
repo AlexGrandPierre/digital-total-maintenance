@@ -15,12 +15,18 @@ type ActionResult = {
   timestamp?: string;
 };
 
+type BrowseResult = {
+  success: boolean;
+  path: string;
+};
+
 interface ElectronAPI {
   sendScanRequest?: (payload: ScanRequestPayload) => void;
   onScanFinished?: (callback: (data: { output?: string }) => void) => void;
   moveToReview?: (filePath: string) => Promise<ActionResult>;
   moveToArchive?: (filePath: string) => Promise<ActionResult>;
   moveToTrash?: (filePath: string) => Promise<ActionResult>;
+  browseForFolder?: () => Promise<BrowseResult>;
 }
 
 interface Window {

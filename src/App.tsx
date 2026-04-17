@@ -177,6 +177,22 @@ function App() {
     }
   }, [scanPreset]);
 
+  const handleBrowseForFolder = async () => {
+    try {
+      const result = await window.electronAPI?.browseForFolder?.();
+
+      if (result?.success && result.path) {
+        setCustomPath(result.path);
+        setActionStatus(null);
+      }
+    } catch (error) {
+      setActionStatus({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Failed to open folder picker.',
+      });
+    }
+  };
+
   const handleScan = () => {
     if (scanPreset === 'custom' && !customPath.trim()) {
       setActionStatus({
@@ -416,16 +432,28 @@ function App() {
                 >
                   Custom folder path
                 </label>
-                <input
-                  id="custom-path"
-                  type="text"
-                  value={customPath}
-                  onChange={(e) => setCustomPath(e.target.value)}
-                  placeholder="/Users/yourname/Documents/example-folder"
-                  className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
-                />
+
+                <div className="flex flex-col gap-3 md:flex-row">
+                  <input
+                    id="custom-path"
+                    type="text"
+                    value={customPath}
+                    onChange={(e) => setCustomPath(e.target.value)}
+                    placeholder="/Users/yourname/Documents/example-folder"
+                    className="flex-1 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
+                  />
+
+                  <button
+                    type="button"
+                    onClick={handleBrowseForFolder}
+                    className="rounded-2xl bg-slate-100 px-4 py-3 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
+                  >
+                    Browse…
+                  </button>
+                </div>
+
                 <p className="text-xs text-slate-500">
-                  Enter an absolute folder path on this computer.
+                  Enter an absolute folder path or choose one with the folder picker.
                 </p>
               </div>
             ) : null}

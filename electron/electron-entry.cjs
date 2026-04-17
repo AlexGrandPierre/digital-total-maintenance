@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const os = require('os');
@@ -88,6 +88,24 @@ app.whenReady().then(() => {
           .join('\n')
           .trim() || `Scan exited with code ${result.code} but produced no output.`,
     });
+  });
+
+  ipcMain.handle('browse-for-folder', async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
+    });
+
+    if (result.canceled || !result.filePaths.length) {
+      return {
+        success: false,
+        path: '',
+      };
+    }
+
+    return {
+      success: true,
+      path: result.filePaths[0],
+    };
   });
 
   ipcMain.handle('move-to-review', async (_event, payload = {}) => {
