@@ -53,7 +53,7 @@ function runPythonScript(scriptPath, args = []) {
 app.whenReady().then(() => {
   createWindow();
 
-  ipcMain.on('scan-desktop', async (event, payload = {}) => {
+  ipcMain.on('scan-desktop', (event, payload = {}) => {
     const preset = payload.preset || 'test';
     const customPath = (payload.customPath || '').trim();
     const scanPath = path.join(__dirname, '..', 'modules', 'scan.py');
@@ -79,14 +79,66 @@ app.whenReady().then(() => {
         break;
     }
 
-    const result = await runPythonScript(scanPath, [targetPath]);
+    const py = spawn('python3', [scanPath, targetPath]);
 
-    event.sender.send('scan-finished', {
-      output:
-        [result.output, result.errorOutput]
-          .filter(Boolean)
-          .join('\n')
-          .trim() || `Scan exited with code ${result.code} but produced no output.`,
+    let buffer = '';
+    let errorOutput = '';
+    let finalResult = null;
+
+    py.stdout.on('data', (data) => {
+      buffer += data.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        try {
+          const parsed = JSON.parse(trimmed);
+
+          if (parsed.type === 'progress') {
+            event.sender.send('scan-progress', parsed);
+          } else if (parsed.type === 'final') {
+            finalResult = parsed.result;
+          }
+        } catch {
+          // ignore malformed progress lines
+        }
+      }
+    });
+
+    py.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
+    py.on('close', (code) => {
+      if (buffer.trim()) {
+        try {
+          const parsed = JSON.parse(buffer.trim());
+          if (parsed.type === 'final') {
+            finalResult = parsed.result;
+          }
+        } catch {
+          // ignore trailing malformed data
+        }
+      }
+
+      event.sender.send('scan-finished', {
+        output:
+          finalResult
+            ? JSON.stringify(finalResult)
+            : [errorOutput]
+                .filter(Boolean)
+                .join('\n')
+                .trim() || `Scan exited with code ${code} but produced no output.`,
+      });
+    });
+
+    py.on('error', (err) => {
+      event.sender.send('scan-finished', {
+        output: `Failed to launch scanner: ${err.message}`,
+      });
     });
   });
 

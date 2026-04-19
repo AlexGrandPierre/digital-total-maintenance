@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DTM — Investor Report 2026</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #1a1814;
+    --ink-soft: #3d3a34;
+    --ink-muted: #7a7670;
+    --paper: #f5f2eb;
+    --paper-warm: #ede9df;
+    --paper-rule: #d4cfc4;
+    --accent: #c8401a;
+    --accent-soft: #e8c5b8;
+    --teal: #1a6b5a;
+    --teal-soft: #b8ddd6;
+    --amber: #b07a12;
+    --amber-soft: #f0ddb0;
+    --col-w: 760px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 300;
+    line-height: 1.7;
+    padding: 0;
+  }
+
+  /* MASTHEAD */
+  .masthead {
+    background: var(--ink);
+    color: var(--paper);
+    padding: 64px 48px 52px;
+    position: relative;
+    overflow: hidden;
+  }
+  .masthead::before {
+    content: '';
+    position: absolute;
+    top: 0; right: 0;
+    width: 340px; height: 100%;
+    background: repeating-linear-gradient(
+      -45deg,
+      transparent,
+      transparent 8px,
+      rgba(255,255,255,0.03) 8px,
+      rgba(255,255,255,0.03) 9px
+    );
+  }
+  .masthead-inner { max-width: var(--col-w); margin: 0 auto; position: relative; }
+  .masthead-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    color: rgba(245,242,235,0.5);
+    text-transform: uppercase;
+    margin-bottom: 20px;
+  }
+  .masthead-title {
+    font-family: 'Playfair Display', serif;
+    font-size: clamp(36px, 5vw, 60px);
+    font-weight: 900;
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    margin-bottom: 16px;
+  }
+  .masthead-title em {
+    font-style: italic;
+    color: var(--accent-soft);
+  }
+  .masthead-sub {
+    font-size: 14px;
+    color: rgba(245,242,235,0.6);
+    max-width: 480px;
+    line-height: 1.6;
+    margin-bottom: 36px;
+  }
+  .masthead-meta {
+    display: flex;
+    gap: 32px;
+    flex-wrap: wrap;
+  }
+  .meta-item { }
+  .meta-val {
+    font-family: 'Playfair Display', serif;
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--paper);
+  }
+  .meta-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    color: rgba(245,242,235,0.4);
+    text-transform: uppercase;
+    margin-top: 2px;
+  }
+  .meta-divider {
+    width: 1px;
+    background: rgba(255,255,255,0.1);
+    align-self: stretch;
+  }
+
+  /* BODY LAYOUT */
+  .body-wrap {
+    max-width: var(--col-w);
+    margin: 0 auto;
+    padding: 0 48px 80px;
+  }
+
+  /* RULE SECTION */
+  .section {
+    border-top: 1px solid var(--paper-rule);
+    margin-top: 56px;
+    padding-top: 32px;
+  }
+  .section-header {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+  .section-num {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-muted);
+    letter-spacing: 0.1em;
+    min-width: 28px;
+  }
+  .section-title {
+    font-family: 'Playfair Display', serif;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+
+  /* PROSE */
+  p { font-size: 15px; color: var(--ink-soft); margin-bottom: 14px; line-height: 1.75; }
+  p:last-child { margin-bottom: 0; }
+  strong { font-weight: 500; color: var(--ink); }
+
+  /* PULL QUOTE */
+  .pull {
+    background: var(--paper-warm);
+    border-left: 3px solid var(--accent);
+    padding: 18px 24px;
+    margin: 24px 0;
+    border-radius: 0 4px 4px 0;
+  }
+  .pull p {
+    font-family: 'Playfair Display', serif;
+    font-size: 16px;
+    font-style: italic;
+    color: var(--ink);
+    margin: 0;
+    line-height: 1.6;
+  }
+
+  /* MARKET SIZE BAND */
+  .market-band {
+    background: var(--ink);
+    color: var(--paper);
+    border-radius: 8px;
+    padding: 32px 36px;
+    margin: 28px 0;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+  }
+  .mband-item { }
+  .mband-val {
+    font-family: 'Playfair Display', serif;
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--paper);
+    margin-bottom: 4px;
+  }
+  .mband-val span { font-size: 16px; font-weight: 400; opacity: 0.7; }
+  .mband-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: rgba(245,242,235,0.45);
+  }
+  .mband-divider {
+    width: 1px;
+    background: rgba(255,255,255,0.1);
+  }
+
+  /* COMPETITOR TABLE */
+  .comp-table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 13.5px; }
+  .comp-table thead tr {
+    border-bottom: 2px solid var(--ink);
+  }
+  .comp-table th {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+    padding: 8px 12px 10px 0;
+    text-align: left;
+    font-weight: 400;
+  }
+  .comp-table td {
+    padding: 12px 12px 12px 0;
+    vertical-align: top;
+    border-bottom: 1px solid var(--paper-rule);
+    color: var(--ink-soft);
+    line-height: 1.5;
+  }
+  .comp-table td:first-child { font-weight: 500; color: var(--ink); }
+  .comp-type {
+    display: inline-block;
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    letter-spacing: 0.05em;
+  }
+  .type-cleanup { background: var(--amber-soft); color: var(--amber); }
+  .type-enterprise { background: var(--teal-soft); color: var(--teal); }
+  .type-ai { background: var(--accent-soft); color: var(--accent); }
+  .type-storage { background: #dde8f5; color: #1a4a8a; }
+
+  /* DIFF GRID */
+  .diff-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin: 20px 0;
+  }
+  .diff-card {
+    background: var(--paper-warm);
+    border: 1px solid var(--paper-rule);
+    border-radius: 6px;
+    padding: 18px 20px;
+  }
+  .diff-card.accent { border-color: var(--accent-soft); background: #faf3ef; }
+  .diff-title {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+    margin-bottom: 8px;
+  }
+  .diff-text { font-size: 13.5px; color: var(--ink-soft); line-height: 1.6; }
+  .diff-text strong { color: var(--ink); }
+
+  /* SCORECARD */
+  .scorecard { margin: 20px 0; }
+  .score-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--paper-rule);
+  }
+  .score-row:last-child { border-bottom: none; }
+  .score-label { font-size: 13.5px; color: var(--ink-soft); flex: 0 0 220px; }
+  .score-bar-track {
+    flex: 1;
+    height: 5px;
+    background: var(--paper-rule);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .score-bar-fill { height: 100%; border-radius: 3px; }
+  .bar-green { background: var(--teal); }
+  .bar-amber { background: var(--amber); }
+  .bar-red { background: var(--accent); }
+  .score-val {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-muted);
+    min-width: 32px;
+    text-align: right;
+  }
+
+  /* NEED LIST */
+  .need-list { list-style: none; margin: 16px 0; }
+  .need-list li {
+    display: flex;
+    gap: 14px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--paper-rule);
+    font-size: 13.5px;
+    color: var(--ink-soft);
+    line-height: 1.6;
+    align-items: flex-start;
+  }
+  .need-list li:last-child { border-bottom: none; }
+  .need-priority {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    margin-top: 2px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .pri-hi { background: #fce8e3; color: var(--accent); }
+  .pri-md { background: var(--amber-soft); color: var(--amber); }
+  .pri-lo { background: var(--teal-soft); color: var(--teal); }
+
+  /* VALUATION BOX */
+  .val-box {
+    border: 1.5px solid var(--ink);
+    border-radius: 8px;
+    padding: 32px 36px;
+    margin: 24px 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 28px;
+  }
+  .val-item {}
+  .val-num {
+    font-family: 'Playfair Display', serif;
+    font-size: 30px;
+    font-weight: 700;
+    color: var(--ink);
+    margin-bottom: 4px;
+  }
+  .val-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+  }
+  .val-note { font-size: 12px; color: var(--ink-muted); margin-top: 4px; line-height: 1.4; }
+
+  /* VERDICT */
+  .verdict {
+    background: var(--ink);
+    color: var(--paper);
+    border-radius: 8px;
+    padding: 36px 40px;
+    margin-top: 40px;
+  }
+  .verdict-title {
+    font-family: 'Playfair Display', serif;
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 16px;
+    color: var(--paper);
+  }
+  .verdict p { color: rgba(245,242,235,0.75); font-size: 14px; margin-bottom: 10px; }
+  .verdict-rating {
+    display: flex;
+    gap: 6px;
+    margin-top: 20px;
+    align-items: center;
+  }
+  .pip {
+    width: 28px; height: 6px;
+    border-radius: 3px;
+    background: rgba(255,255,255,0.15);
+  }
+  .pip.on { background: var(--accent-soft); }
+  .rating-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: rgba(245,242,235,0.45);
+    margin-left: 10px;
+    letter-spacing: 0.08em;
+  }
+
+  /* FOOTER */
+  .report-footer {
+    border-top: 1px solid var(--paper-rule);
+    margin-top: 64px;
+    padding-top: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .footer-note {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    color: var(--ink-muted);
+    letter-spacing: 0.06em;
+  }
+
+  @media (max-width: 640px) {
+    .masthead { padding: 48px 24px 40px; }
+    .body-wrap { padding: 0 24px 64px; }
+    .market-band { grid-template-columns: 1fr; }
+    .mband-divider { display: none; }
+    .diff-grid { grid-template-columns: 1fr; }
+    .val-box { grid-template-columns: 1fr; }
+    .masthead-meta { gap: 20px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="masthead">
+  <div class="masthead-inner">
+    <div class="masthead-label">Confidential — Investor Overview · April 2026</div>
+    <h1 class="masthead-title">Digital Total<br><em>Maintenance</em></h1>
+    <p class="masthead-sub">A mediated file intelligence layer for personal and professional digital environments. Early-stage. Working prototype confirmed.</p>
+    <div class="masthead-meta">
+      <div class="meta-item">
+        <div class="meta-val">$11.8B</div>
+        <div class="meta-label">Addressable market (2026)</div>
+      </div>
+      <div class="meta-divider"></div>
+      <div class="meta-item">
+        <div class="meta-val">~17%</div>
+        <div class="meta-label">Market CAGR</div>
+      </div>
+      <div class="meta-divider"></div>
+      <div class="meta-item">
+        <div class="meta-val">2.3B</div>
+        <div class="meta-label">Personal cloud users globally</div>
+      </div>
+      <div class="meta-divider"></div>
+      <div class="meta-item">
+        <div class="meta-val">62%</div>
+        <div class="meta-label">Users report digital file anxiety</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="body-wrap">
+
+  <!-- 01 EXECUTIVE SUMMARY -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">01</span>
+      <h2 class="section-title">Executive Summary</h2>
+    </div>
+    <p>DTM (Digital Total Maintenance) is an early-stage desktop application that addresses a structurally underserved problem: the growing illegibility of personal and professional file systems. It is not a cleanup script, a file explorer, or a document manager — it is a <strong>decision layer</strong> between users and their filesystem, designed to restore legibility and agency over accumulated digital complexity.</p>
+    <p>A working prototype has been demonstrated, scanning 134,706 files across a real Desktop directory, categorizing results into prioritized action queues (review, archive, duplicate, remove), and surfacing per-file reasoning with confidence scores. The full scan-to-action loop is operational.</p>
+    <div class="pull"><p>"The market has tools for storing files and tools for deleting duplicates. No product currently mediates between human intent and filesystem complexity at the individual level — with explainability built in."</p></div>
+    <p>The founding team combines computer science depth with a rare background in Digital Computation Studies and philosophy — a combination that produced the product's most valuable design characteristic: a principled, bounded architecture that prioritizes human agency over automation. The product is pre-revenue, pre-funding, and at the prototype-to-product inflection point.</p>
+  </div>
+
+  <!-- 02 MARKET SIZE -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">02</span>
+      <h2 class="section-title">Market Landscape &amp; Size</h2>
+    </div>
+    <p>DTM touches three overlapping market categories. The relevant sizing depends on which segment the product scales into first: consumer utility, prosumer productivity, or SME file governance.</p>
+
+    <div class="market-band">
+      <div class="mband-item">
+        <div class="mband-val">$11.8B <span>2026</span></div>
+        <div class="mband-label">Document &amp; File Mgmt Systems</div>
+      </div>
+      <div class="mband-divider"></div>
+      <div class="mband-item">
+        <div class="mband-val">$11.7B <span>2025</span></div>
+        <div class="mband-label">File Analysis Software</div>
+      </div>
+      <div class="mband-divider"></div>
+      <div class="mband-item">
+        <div class="mband-val">$21.4B <span>2031E</span></div>
+        <div class="mband-label">Combined projected TAM</div>
+      </div>
+    </div>
+
+    <p>The document management system market was valued at <strong>$8.3B in 2025</strong>, growing at a 15% CAGR toward nearly $30B by 2034. The file analysis software sub-segment adds another $10–12B in 2025 revenue, growing at 17% CAGR. Both are dominated by enterprise players (Microsoft, IBM, Oracle, OpenText) with near-zero presence in the consumer and prosumer segments.</p>
+    <p>The consumer angle is validated by behavioral data: <strong>62% of Americans report stress from the volume of their digital files</strong>, over 42% retain documents they no longer need, and only 52% delete emails regularly. Digital hoarding is documented in peer-reviewed literature as correlated with anxiety, reduced productivity, and cybersecurity exposure. The demand exists. The supply — consumer-grade, explainable file intelligence — does not.</p>
+  </div>
+
+  <!-- 03 COMPETITIVE LANDSCAPE -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">03</span>
+      <h2 class="section-title">Competitive Landscape</h2>
+    </div>
+    <p>The competitive field divides into four categories. None occupy DTM's specific position as an explainable, bounded, agency-preserving decision layer for local file systems.</p>
+
+    <table class="comp-table">
+      <thead>
+        <tr>
+          <th style="width:140px">Product</th>
+          <th style="width:80px">Type</th>
+          <th>What it does</th>
+          <th style="width:120px">Revenue / Scale</th>
+          <th>Gap vs. DTM</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>CleanMyMac X<br><small style="font-weight:300;font-size:12px">MacPaw</small></td>
+          <td><span class="comp-type type-cleanup">Cleanup</span></td>
+          <td>System junk removal, performance optimization, malware scan. Strong brand, $89.95 one-time or Setapp subscription.</td>
+          <td>~$92M ARR (MacPaw total)</td>
+          <td>Cleans system artifacts, not user file complexity. No reasoning layer. No agency model.</td>
+        </tr>
+        <tr>
+          <td>Gemini 2<br><small style="font-weight:300;font-size:12px">MacPaw</small></td>
+          <td><span class="comp-type type-cleanup">Cleanup</span></td>
+          <td>Duplicate file detection with smart selection algorithm. Mac-only. $19.95 license.</td>
+          <td>Bundled in MacPaw suite</td>
+          <td>Single-function (duplicates only). No categorization, no confidence scores, no archive/review queues.</td>
+        </tr>
+        <tr>
+          <td>Hazel<br><small style="font-weight:300;font-size:12px">Noodlesoft</small></td>
+          <td><span class="comp-type type-cleanup">Automation</span></td>
+          <td>Rule-based folder watcher. Moves/renames/tags files according to user-created rules. Power-user tool.</td>
+          <td>Small indie, ~$42 one-time</td>
+          <td>Requires user to define rules manually — no AI reasoning, no scanning, no decision support.</td>
+        </tr>
+        <tr>
+          <td>TreeSize / WinDirStat<br><small style="font-weight:300;font-size:12px">JAM Software / OSS</small></td>
+          <td><span class="comp-type type-cleanup">Analysis</span></td>
+          <td>Disk space visualization via treemaps. Shows what's large, not what should be removed.</td>
+          <td>Free / $29.95 Pro</td>
+          <td>Visualization only. No classification, no action support, no reasoning.</td>
+        </tr>
+        <tr>
+          <td>Microsoft OneDrive + Copilot<br><small style="font-weight:300;font-size:12px">Microsoft</small></td>
+          <td><span class="comp-type type-enterprise">Enterprise</span></td>
+          <td>Cloud storage with AI search and tagging. Reduces manual tagging by ~65% in enterprise contexts.</td>
+          <td>$365B+ total Microsoft rev.</td>
+          <td>Cloud-first. No local file intelligence. No decision layer for unstructured personal file systems.</td>
+        </tr>
+        <tr>
+          <td>OpenText / Hyland<br><small style="font-weight:300;font-size:12px">Enterprise DMS</small></td>
+          <td><span class="comp-type type-enterprise">Enterprise</span></td>
+          <td>Full-stack document management for regulated industries (healthcare, legal, finance).</td>
+          <td>$5B+ combined</td>
+          <td>Priced and scoped for enterprise compliance. Not consumer-accessible. No UX for personal use.</td>
+        </tr>
+        <tr>
+          <td>Fabric / Notion<br><small style="font-weight:300;font-size:12px">Knowledge tools</small></td>
+          <td><span class="comp-type type-ai">AI / PKM</span></td>
+          <td>Self-organizing workspaces and knowledge bases. Cloud-native, cross-device, linked notes.</td>
+          <td>Notion: ~$250M ARR</td>
+          <td>Knowledge management, not file system remediation. Requires migration. Doesn't touch existing local file chaos.</td>
+        </tr>
+        <tr>
+          <td>AI File Organizer Pro<br><small style="font-weight:300;font-size:12px">Emerging / indie</small></td>
+          <td><span class="comp-type type-ai">AI</span></td>
+          <td>AI-powered sorting and renaming using GPT/Claude/Gemini. One-click cleanup with auto-categorization.</td>
+          <td>Early stage, negligible</td>
+          <td>Automates without explanations. No confidence scores, no reversibility model, no bounded architecture.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- 04 DIFFERENTIATION -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">04</span>
+      <h2 class="section-title">Differentiation Analysis</h2>
+    </div>
+    <p>DTM's competitive moat is not a single feature — it is a philosophy operationalized into architecture. Every competitor either cleans files without explaining why, or requires the user to define the rules themselves. DTM occupies the gap: <strong>AI-reasoned classification with human decision authority</strong>.</p>
+
+    <div class="diff-grid">
+      <div class="diff-card accent">
+        <div class="diff-title">Explainability by default</div>
+        <div class="diff-text">Every action surfaces a <strong>reason, confidence score, and recommended action</strong>. No competitor at the consumer level does this. It is both a trust mechanism and a defensible technical differentiator.</div>
+      </div>
+      <div class="diff-card">
+        <div class="diff-title">Bounded architecture</div>
+        <div class="diff-text">The system is designed to cap, limit, and scale safely. No runaway scans. No unbounded memory. This is rare in the consumer utility category and critical for safe operation on real machines.</div>
+      </div>
+      <div class="diff-card">
+        <div class="diff-title">Agency preservation</div>
+        <div class="diff-text">DTM surfaces decisions — it does not execute them. <strong>Move to Trash / Archive / Review</strong> are user actions, not automatic. This is the core philosophical position, and it prevents the catastrophic failure mode of silent deletion.</div>
+      </div>
+      <div class="diff-card">
+        <div class="diff-title">Local-first posture</div>
+        <div class="diff-text">Unlike cloud-native competitors, DTM runs on-device. This addresses the significant segment of users who will not grant cloud access to personal files — a growing concern post-2024 data privacy discourse.</div>
+      </div>
+    </div>
+
+    <p>The nearest analog may be <strong>Hazel</strong> (rule-based automation with strong user retention among power users) combined with the reasoning layer of a document intelligence platform — but built for individuals, not enterprises, and without requiring users to pre-define their own classification system.</p>
+  </div>
+
+  <!-- 05 PROTOTYPE ASSESSMENT -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">05</span>
+      <h2 class="section-title">Prototype Assessment</h2>
+    </div>
+    <p>The confirmed prototype demonstrates a complete scan-to-action pipeline on a real machine (134,706 files, Desktop directory, dev-fast mode). The design language is clean and purposeful. Key subsystems are operational. However, signal quality requires calibration before any production release or broader demo.</p>
+
+    <div class="scorecard">
+      <div class="score-row"><span class="score-label">End-to-end loop completeness</span><div class="score-bar-track"><div class="score-bar-fill bar-green" style="width:90%"></div></div><span class="score-val">90%</span></div>
+      <div class="score-row"><span class="score-label">Visual design & UX clarity</span><div class="score-bar-track"><div class="score-bar-fill bar-green" style="width:82%"></div></div><span class="score-val">82%</span></div>
+      <div class="score-row"><span class="score-label">Explainability implementation</span><div class="score-bar-track"><div class="score-bar-fill bar-green" style="width:78%"></div></div><span class="score-val">78%</span></div>
+      <div class="score-row"><span class="score-label">Reversibility architecture</span><div class="score-bar-track"><div class="score-bar-fill bar-green" style="width:75%"></div></div><span class="score-val">75%</span></div>
+      <div class="score-row"><span class="score-label">Classification signal quality</span><div class="score-bar-track"><div class="score-bar-fill bar-amber" style="width:38%"></div></div><span class="score-val">38%</span></div>
+      <div class="score-row"><span class="score-label">Duplicate filter precision</span><div class="score-bar-track"><div class="score-bar-fill bar-red" style="width:32%"></div></div><span class="score-val">32%</span></div>
+      <div class="score-row"><span class="score-label">Bounded scan safety</span><div class="score-bar-track"><div class="score-bar-fill bar-amber" style="width:55%"></div></div><span class="score-val">55%</span></div>
+    </div>
+
+    <p style="margin-top:20px">The critical deficiencies — system file noise in the review queue, low-value duplicate pairs, and absence of a visible scan cap — are all calibration and filter problems, not architectural ones. They are fixable in weeks, not months. The underlying structure is sound.</p>
+  </div>
+
+  <!-- 06 NEEDS -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">06</span>
+      <h2 class="section-title">What the Product Needs</h2>
+    </div>
+    <p>Ordered by investor priority — what must be true before the next funding conversation, and what must be true before meaningful scale.</p>
+
+    <ul class="need-list">
+      <li>
+        <span class="need-priority pri-hi">Critical</span>
+        <div><strong>Classification filter quality.</strong> The system must exclude known system files (.DS_Store, .localized, Thumbs.db, temp files, node_modules) from the Needs Review queue automatically. This is the first thing any prospective user will see. Currently, 2 of the first 3 visible items are system artifacts. Fixable in days.</div>
+      </li>
+      <li>
+        <span class="need-priority pri-hi">Critical</span>
+        <div><strong>Duplicate precision floor.</strong> Apply a minimum file size threshold (suggested: >10KB) and extension exclusion list before surfacing duplicate pairs. The current 35,140 pairs include zero-value system file matches that erode trust in the entire feature. The duplicate engine is the product's most immediately monetizable feature — it must be reliable.</div>
+      </li>
+      <li>
+        <span class="need-priority pri-hi">Critical</span>
+        <div><strong>Cross-machine validation.</strong> Demonstrate the scan pipeline on a minimum of three machines not owned by the team. One clean machine, one heavily used developer machine, one non-technical user machine. This is the single most important credibility signal for any investor meeting.</div>
+      </li>
+      <li>
+        <span class="need-priority pri-md">Important</span>
+        <div><strong>Review queue triage.</strong> A 26% flagged-for-review rate (34,705 of 134,706 files) is not processable. Add a confidence threshold control that defaults to showing only low-confidence files to the human queue. High-confidence items should be auto-categorized with a batch-approve path.</div>
+      </li>
+      <li>
+        <span class="need-priority pri-md">Important</span>
+        <div><strong>Bulk actions.</strong> Individual card-level actions will not scale beyond 20 items. Users need "dismiss all low-risk," "archive all zip files older than 1 year," and "move all clutter to trash" patterns. This also unlocks the first meaningful productivity metric to present investors.</div>
+      </li>
+      <li>
+        <span class="need-priority pri-md">Important</span>
+        <div><strong>Monetization model definition.</strong> Consumer subscription ($5–9/month or $29–49/year) vs. one-time license vs. freemium with premium scan depth. The MacPaw Setapp model ($9.99/month for a bundle) is a useful benchmark. This must be resolved before a seed round conversation.</div>
+      </li>
+      <li>
+        <span class="need-priority pri-lo">Deferred</span>
+        <div><strong>Windows support.</strong> The prototype appears to be Mac-first. ~73% of personal computers globally run Windows. A cross-platform path (or an intentional Mac-only positioning) must be articulated. If Mac-only, justify with CleanMyMac's success at ~$92M ARR as a comparable.</div>
+      </li>
+      <li>
+        <span class="need-priority pri-lo">Deferred</span>
+        <div><strong>Activity history and undo.</strong> A log of all actions taken, with per-action reversibility, is the completion of the reversibility principle. Without it, user trust is bounded. This is a later-layer concern but must appear on the roadmap.</div>
+      </li>
+    </ul>
+  </div>
+
+  <!-- 07 PROJECTED VALUE -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">07</span>
+      <h2 class="section-title">Projected Value &amp; Scenarios</h2>
+    </div>
+    <p>The following projections are directional benchmarks, not financial forecasts. They are constructed from comparable consumer utility products and the demonstrated market appetite for file intelligence tools.</p>
+
+    <div class="val-box">
+      <div class="val-item">
+        <div class="val-num">$2–5M</div>
+        <div class="val-label">Seed round target</div>
+        <div class="val-note">Comparable to MacPaw early rounds and niche developer tools. Reasonable for post-calibration prototype with cross-machine validation.</div>
+      </div>
+      <div class="val-item">
+        <div class="val-num">50K users</div>
+        <div class="val-label">Year 1 milestone</div>
+        <div class="val-note">Achievable via Mac power-user communities (r/MacApps, Product Hunt, Setapp). Gemini 2 hit similar scale within 18 months of launch.</div>
+      </div>
+      <div class="val-item">
+        <div class="val-num">$3–5M</div>
+        <div class="val-label">ARR at 100K paid users</div>
+        <div class="val-note">At $29–49/year average. Requires retention above 40% annual — achievable if the product genuinely solves file anxiety on repeat use.</div>
+      </div>
+    </div>
+
+    <p>The upside scenario is a <strong>Setapp-style bundle acquisition</strong> (MacPaw has demonstrated this exit path) or a <strong>strategic acquisition</strong> by a productivity suite (Notion, 1Password, or a hardware-adjacent player like Backblaze or iCloud). The product's philosophy and architecture would transfer cleanly into an enterprise file governance layer — a significantly larger market at $5B+.</p>
+    <p>The risk scenario is commoditization: Apple integrates a version of this into macOS Finder, or Microsoft ships a comparable Copilot-powered local file agent. Both are plausible within 3 years. The defensible moat in that world is <strong>the explainability and agency model</strong> — which Apple and Microsoft have historically not prioritized in consumer-facing storage tools.</p>
+  </div>
+
+  <!-- 08 VERDICT -->
+  <div class="verdict">
+    <div class="verdict-title">Investor Verdict</div>
+    <p>DTM is solving a real, large, and emotionally resonant problem with a working prototype and a principled architecture. The founding philosophy — protect the human from the computer, protect the computer from the human — is not marketing language. It manifests in the product's structure and produces a defensible position that pure-automation competitors cannot easily replicate.</p>
+    <p>The product is two to four weeks of calibration work away from a compelling seed-round demo. The classification noise is fixable. The architecture is right. The market is real, growing at 15–17% annually, and the consumer segment remains structurally unserved at the product's price point and positioning.</p>
+    <p>The founder's interdisciplinary background — CS plus Digital Computation Studies plus philosophy — is the product's most underrated asset. Most file tools are built by engineers optimizing for performance. This one is built by someone who also studied why humans struggle with digital complexity. That difference is visible in the product.</p>
+    <p><strong>Recommended posture: watchlist with re-evaluation post cross-machine validation and filter calibration. High-conviction if those two criteria are met.</strong></p>
+    <div class="verdict-rating">
+      <div class="pip on"></div>
+      <div class="pip on"></div>
+      <div class="pip on"></div>
+      <div class="pip on"></div>
+      <div class="pip"></div>
+      <span class="rating-label">4 / 5 — Strong watch, conditional conviction</span>
+    </div>
+  </div>
+
+  <div class="report-footer">
+    <span class="footer-note">DTM Investor Overview · Prepared April 2026 · Pre-seed stage</span>
+    <span class="footer-note">For discussion purposes only — not a solicitation</span>
+  </div>
+
+</div>
+</body>
+</html>

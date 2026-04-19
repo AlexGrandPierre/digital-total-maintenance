@@ -4,6 +4,9 @@ import ScanButton from './components/ScanButton';
 
 type ScanPreset = 'test' | 'desktop' | 'downloads' | 'documents' | 'custom';
 
+type SortKey = 'name' | 'age_days' | 'size' | 'confidence';
+type SortDirection = 'asc' | 'desc';
+
 type ClassifiedFile = {
   path: string;
   name: string;
@@ -22,15 +25,40 @@ type ScanResult = {
   scanned_at: string;
   folder: string;
   mode: string;
+  scan_warnings: string[];
   total_files: number;
+
   review_files: ClassifiedFile[];
+  review_total: number;
+
   system_files: ClassifiedFile[];
+  system_total: number;
+
   archive_candidates: ClassifiedFile[];
+  archive_total: number;
+
   remove_candidates: ClassifiedFile[];
+  remove_total: number;
+
   duplicates: string[][];
+  duplicates_total: number;
+
   age_buckets: Record<string, number>;
   by_ext: Record<string, number>;
+
   errors: Array<{ path: string; error: string }>;
+  errors_total: number;
+
+  excluded_dirs_count: number;
+
+  detail_caps: {
+    review_files: number;
+    system_files: number;
+    archive_candidates: number;
+    remove_candidates: number;
+    duplicates: number;
+    errors: number;
+  };
 };
 
 function StatCard({
@@ -123,6 +151,52 @@ function ModePill({
   );
 }
 
+function QueueSortControls({
+  sortKey,
+  sortDirection,
+  onSortKeyChange,
+  onSortDirectionChange,
+}: {
+  sortKey: SortKey;
+  sortDirection: SortDirection;
+  onSortKeyChange: (value: SortKey) => void;
+  onSortDirectionChange: (value: SortDirection) => void;
+}) {
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-3">
+      <div className="flex items-center gap-2">
+        <label className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">
+          Sort by
+        </label>
+        <select
+          value={sortKey}
+          onChange={(e) => onSortKeyChange(e.target.value as SortKey)}
+          className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+        >
+          <option value="confidence">Confidence</option>
+          <option value="age_days">Age</option>
+          <option value="size">Size</option>
+          <option value="name">Name</option>
+        </select>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <label className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">
+          Direction
+        </label>
+        <select
+          value={sortDirection}
+          onChange={(e) => onSortDirectionChange(e.target.value as SortDirection)}
+          className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+        >
+          <option value="asc">Ascending</option>
+          <option value="desc">Descending</option>
+        </select>
+      </div>
+    </div>
+  );
+}
+
 function FileBadge({ filename }: { filename: string }) {
   const ext = filename.includes('.') ? filename.split('.').pop()?.toUpperCase() : 'FILE';
 
@@ -131,6 +205,41 @@ function FileBadge({ filename }: { filename: string }) {
       {ext || 'FILE'}
     </div>
   );
+}
+
+const confidenceRank: Record<'high' | 'medium' | 'low', number> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+};
+
+function compareValues(
+  a: ClassifiedFile,
+  b: ClassifiedFile,
+  key: SortKey,
+  direction: SortDirection
+) {
+  let result = 0;
+
+  if (key === 'confidence') {
+    result = confidenceRank[a.confidence] - confidenceRank[b.confidence];
+  } else if (key === 'name') {
+    result = a.name.localeCompare(b.name);
+  } else if (key === 'age_days') {
+    result = a.age_days - b.age_days;
+  } else if (key === 'size') {
+    result = a.size - b.size;
+  }
+
+  return direction === 'asc' ? result : -result;
+}
+
+function sortQueue(
+  items: ClassifiedFile[],
+  key: SortKey,
+  direction: SortDirection
+) {
+  return [...items].sort((a, b) => compareValues(a, b, key, direction));
 }
 
 function App() {
@@ -144,13 +253,48 @@ function App() {
     tone: 'success' | 'error';
     message: string;
   } | null>(null);
+
   const [busyPath, setBusyPath] = useState<string | null>(null);
+  const [scanProgress, setScanProgress] = useState<{
+    status: 'starting' | 'scanning' | 'finalizing';
+    target: string;
+    files_scanned: number;
+    current_path: string;
+    elapsed_seconds: number;
+    review_total: number;
+    archive_total: number;
+    remove_total: number;
+    duplicates_total: number;
+    excluded_dirs_count?: number;
+  } | null>(null);
+
+  const [reviewSortKey, setReviewSortKey] = useState<SortKey>('confidence');
+  const [reviewSortDirection, setReviewSortDirection] = useState<SortDirection>('asc');
+
+  const [archiveSortKey, setArchiveSortKey] = useState<SortKey>('age_days');
+  const [archiveSortDirection, setArchiveSortDirection] = useState<SortDirection>('desc');
+
+  const [removeSortKey, setRemoveSortKey] = useState<SortKey>('age_days');
+  const [removeSortDirection, setRemoveSortDirection] = useState<SortDirection>('desc');
+
+  const [reviewVisibleCount, setReviewVisibleCount] = useState(8);
+  const [archiveVisibleCount, setArchiveVisibleCount] = useState(8);
+  const [removeVisibleCount, setRemoveVisibleCount] = useState(8);
+
+  const [duplicateVisibleCount, setDuplicateVisibleCount] = useState(8);
 
   useEffect(() => {
     window.electronAPI?.onScanFinished?.((data: { output?: string }) => {
       const output = data.output || 'Scan completed with no output.';
       setScanOutput(output);
       setIsScanning(false);
+      setScanProgress(null);
+
+      setReviewVisibleCount(8);
+      setArchiveVisibleCount(8);
+      setRemoveVisibleCount(8);
+
+      setDuplicateVisibleCount(8);
 
       try {
         const parsed = JSON.parse(output);
@@ -158,6 +302,21 @@ function App() {
       } catch {
         setScanData(null);
       }
+    });
+
+    window.electronAPI?.onScanProgress?.((data) => {
+      setScanProgress({
+        status: data.status,
+        target: data.target,
+        files_scanned: data.files_scanned,
+        current_path: data.current_path,
+        elapsed_seconds: data.elapsed_seconds,
+        review_total: data.review_total,
+        archive_total: data.archive_total,
+        remove_total: data.remove_total,
+        duplicates_total: data.duplicates_total,
+        excluded_dirs_count: data.excluded_dirs_count,
+      });
     });
   }, []);
 
@@ -177,6 +336,21 @@ function App() {
     }
   }, [scanPreset]);
 
+  const sortedReviewFiles = useMemo(() => {
+    if (!scanData) return [];
+    return sortQueue(scanData.review_files, reviewSortKey, reviewSortDirection);
+  }, [scanData, reviewSortKey, reviewSortDirection]);
+  
+  const sortedArchiveCandidates = useMemo(() => {
+    if (!scanData) return [];
+    return sortQueue(scanData.archive_candidates, archiveSortKey, archiveSortDirection);
+  }, [scanData, archiveSortKey, archiveSortDirection]);
+  
+  const sortedRemoveCandidates = useMemo(() => {
+    if (!scanData) return [];
+    return sortQueue(scanData.remove_candidates, removeSortKey, removeSortDirection);
+  }, [scanData, removeSortKey, removeSortDirection]);
+
   const handleBrowseForFolder = async () => {
     try {
       const result = await window.electronAPI?.browseForFolder?.();
@@ -193,11 +367,27 @@ function App() {
     }
   };
 
+  const visibleDuplicates = useMemo(() => {
+    if (!scanData) return [];
+    return scanData.duplicates.slice(0, duplicateVisibleCount);
+  }, [scanData, duplicateVisibleCount]);
+
   const handleScan = () => {
+    setScanProgress(null);
     if (scanPreset === 'custom' && !customPath.trim()) {
       setActionStatus({
         tone: 'error',
         message: 'Please enter a folder path before scanning a custom location.',
+      });
+      return;
+    }
+
+  const normalizedCustomPath = customPath.trim();
+    if (scanPreset === 'custom' && normalizedCustomPath === '/') {
+      setActionStatus({
+        tone: 'error',
+        message:
+          'Scanning the system root is restricted in the current safe mode. Choose a more specific folder.',
       });
       return;
     }
@@ -210,6 +400,57 @@ function App() {
     window.electronAPI?.sendScanRequest?.({
       preset: scanPreset,
       customPath: customPath.trim(),
+    });
+  };
+
+  const removePathFromQueues = (
+    filePath: string,
+    actionType: 'review' | 'archive' | 'remove'
+  ) => {
+    setScanData((prev) => {
+      if (!prev) return prev;
+  
+      const next = {
+        ...prev,
+        review_files: prev.review_files.filter((f) => f.path !== filePath),
+        archive_candidates: prev.archive_candidates.filter((f) => f.path !== filePath),
+        remove_candidates: prev.remove_candidates.filter((f) => f.path !== filePath),
+        system_files: prev.system_files.filter((f) => f.path !== filePath),
+        duplicates: prev.duplicates.filter(
+          (pair) => pair[0] !== filePath && pair[1] !== filePath
+        ),
+        review_total: prev.review_total,
+        archive_total: prev.archive_total,
+        remove_total: prev.remove_total,
+      };
+  
+      if (actionType === 'review') {
+        next.review_total = Math.max(0, prev.review_total - 1);
+      }
+  
+      if (actionType === 'archive') {
+        next.archive_total = Math.max(0, prev.archive_total - 1);
+      }
+  
+      if (actionType === 'remove') {
+        next.remove_total = Math.max(0, prev.remove_total - 1);
+      }
+  
+      return next;
+    });
+  };
+
+  const removeDuplicateFromQueue = (duplicatePath: string) => {
+    setScanData((prev) => {
+      if (!prev) return prev;
+  
+      return {
+        ...prev,
+        duplicates: prev.duplicates.filter(
+          (pair) => pair[0] !== duplicatePath && pair[1] !== duplicatePath
+        ),
+        duplicates_total: Math.max(0, prev.duplicates_total - 1),
+      };
     });
   };
 
@@ -227,6 +468,7 @@ function App() {
             ? `Moved to DTM Review: ${result.destination}`
             : result.message,
         });
+        removePathFromQueues(filePath, 'review');
 
         // Refresh current scan after action
         window.electronAPI?.sendScanRequest?.({
@@ -263,6 +505,8 @@ function App() {
             ? `Moved to DTM Archive: ${result.destination}`
             : result.message,
         });
+        removePathFromQueues(filePath, 'archive');
+
         window.electronAPI?.sendScanRequest?.({
           preset: scanPreset,
           customPath: customPath.trim(),
@@ -297,6 +541,8 @@ function App() {
             ? `Moved to Trash: ${result.destination}`
             : result.message,
         });
+        removePathFromQueues(filePath, 'remove');
+
         window.electronAPI?.sendScanRequest?.({
           preset: scanPreset,
           customPath: customPath.trim(),
@@ -317,12 +563,49 @@ function App() {
     }
   };
 
+  const handleArchiveDuplicate = async (duplicatePath: string) => {
+    setBusyPath(duplicatePath);
+    setActionStatus(null);
+  
+    try {
+      const result = await window.electronAPI?.moveToArchive?.(duplicatePath);
+  
+      if (result?.success) {
+        setActionStatus({
+          tone: 'success',
+          message: result.destination
+            ? `Duplicate moved to DTM Archive: ${result.destination}`
+            : result.message,
+        });
+  
+        removeDuplicateFromQueue(duplicatePath);
+  
+        window.electronAPI?.sendScanRequest?.({
+          preset: scanPreset,
+          customPath: customPath.trim(),
+        });
+      } else {
+        setActionStatus({
+          tone: 'error',
+          message: result?.message || 'Failed to archive duplicate.',
+        });
+      }
+    } catch (error) {
+      setActionStatus({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Unexpected duplicate archive failure.',
+      });
+    } finally {
+      setBusyPath(null);
+    }
+  };
+
   const insights = useMemo(() => {
     if (!scanData) return null;
   
-    const review = scanData.review_files.length;
-    const archive = scanData.archive_candidates.length;
-    const remove = scanData.remove_candidates.length;
+    const review = scanData.review_total;
+    const archive = scanData.archive_total;
+    const remove = scanData.remove_total;
     const oldFiles = scanData.age_buckets['>180d'] || 0;
   
     let summary = '';
@@ -357,14 +640,27 @@ function App() {
   const reviewSummary = useMemo(() => {
     if (!scanData) return [];
     return [
-      ['Needs review', scanData.review_files.length],
-      ['Archive candidates', scanData.archive_candidates.length],
-      ['Remove candidates', scanData.remove_candidates.length],
-      ['Duplicate pairs', scanData.duplicates.length],
+      ['Needs review', scanData.review_total],
+      ['Archive candidates', scanData.archive_total],
+      ['Remove candidates', scanData.remove_total],
+      ['Duplicate pairs', scanData.duplicates_total],
+      ['Excluded directories', scanData.excluded_dirs_count],
       ['Folder scanned', scanData.folder],
       ['Mode', scanData.mode],
     ] as Array<[string, number | string]>;
   }, [scanData]);
+
+  const visibleReviewFiles = useMemo(() => {
+    return sortedReviewFiles.slice(0, reviewVisibleCount);
+  }, [sortedReviewFiles, reviewVisibleCount]);
+  
+  const visibleArchiveCandidates = useMemo(() => {
+    return sortedArchiveCandidates.slice(0, archiveVisibleCount);
+  }, [sortedArchiveCandidates, archiveVisibleCount]);
+  
+  const visibleRemoveCandidates = useMemo(() => {
+    return sortedRemoveCandidates.slice(0, removeVisibleCount);
+  }, [sortedRemoveCandidates, removeVisibleCount]);
 
   return (
     <div className="min-h-screen bg-[#f7f7f2] text-slate-900">
@@ -510,6 +806,95 @@ function App() {
             </section>
           ) : null}
 
+          {isScanning && scanProgress ? (
+            <section className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium uppercase tracking-[0.18em] text-slate-400">
+                    Scan Activity
+                  </p>
+                  <h3 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
+                    {scanProgress.status === 'starting'
+                      ? 'Initializing scan'
+                      : scanProgress.status === 'finalizing'
+                      ? 'Finalizing results'
+                      : 'Exploring file landscape'}
+                  </h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-500">
+                    DTM is currently inspecting the selected target and building bounded summaries for safe review.
+                  </p>
+
+                  <div className="mt-5 rounded-2xl bg-slate-50 px-4 py-4">
+                    <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">
+                      Current Path
+                    </div>
+                    <div className="mt-2 break-all text-sm text-slate-700">
+                      {scanProgress.current_path}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 xl:w-[26rem]">
+                  <div className="rounded-2xl bg-slate-50 p-4">
+                    <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Files Processed</div>
+                    <div className="mt-2 text-2xl font-semibold text-slate-900">
+                      {scanProgress.files_scanned.toLocaleString()}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl bg-slate-50 p-4">
+                    <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Elapsed</div>
+                    <div className="mt-2 text-2xl font-semibold text-slate-900">
+                      {scanProgress.elapsed_seconds}s
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl bg-amber-50 p-4">
+                    <div className="text-xs uppercase tracking-[0.18em] text-amber-500">Review</div>
+                    <div className="mt-2 text-2xl font-semibold text-amber-900">
+                      {scanProgress.review_total.toLocaleString()}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl bg-sky-50 p-4">
+                    <div className="text-xs uppercase tracking-[0.18em] text-sky-500">Archive</div>
+                    <div className="mt-2 text-2xl font-semibold text-sky-900">
+                      {scanProgress.archive_total.toLocaleString()}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl bg-rose-50 p-4">
+                    <div className="text-xs uppercase tracking-[0.18em] text-rose-500">Remove</div>
+                    <div className="mt-2 text-2xl font-semibold text-rose-900">
+                      {scanProgress.remove_total.toLocaleString()}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl bg-slate-50 p-4">
+                    <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Duplicates</div>
+                    <div className="mt-2 text-2xl font-semibold text-slate-900">
+                      {scanProgress.duplicates_total.toLocaleString()}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-5 flex flex-wrap gap-3 text-xs text-slate-500">
+                <span className="rounded-full bg-slate-100 px-3 py-1">
+                  Target: {scanProgress.target}
+                </span>
+                {typeof scanProgress.excluded_dirs_count === 'number' ? (
+                  <span className="rounded-full bg-slate-100 px-3 py-1">
+                    Excluded dirs: {scanProgress.excluded_dirs_count}
+                  </span>
+                ) : null}
+                <span className="rounded-full bg-slate-100 px-3 py-1">
+                  Status: {scanProgress.status}
+                </span>
+              </div>
+            </section>
+          ) : null}
+
           {scanData ? (
             <>
               {insights && (
@@ -536,22 +921,56 @@ function App() {
                   </div>
                 </SectionCard>
               )}
+
+              {scanData && (
+                <section className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4 shadow-sm">
+                  <div className="space-y-2 text-sm text-slate-700">
+                    <div>
+                      <span className="font-semibold">Scan mode:</span> {scanData.mode}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Detailed review items shown:</span>{' '}
+                      {scanData.review_files.length} of {scanData.review_total}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Detailed archive items shown:</span>{' '}
+                      {scanData.archive_candidates.length} of {scanData.archive_total}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Detailed remove items shown:</span>{' '}
+                      {scanData.remove_candidates.length} of {scanData.remove_total}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Excluded directories:</span>{' '}
+                      {scanData.excluded_dirs_count}
+                    </div>
+
+                    {scanData.scan_warnings?.length > 0 ? (
+                      <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
+                        {scanData.scan_warnings.map((warning, index) => (
+                          <div key={index}>⚠️ {warning}</div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                </section>
+              )}
               
               <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <StatCard label="Total files" value={scanData.total_files} tone="neutral" />
                 <StatCard
                   label="Needs review"
-                  value={scanData.review_files.length}
+                  value={scanData.review_total}
                   tone={scanData.review_files.length > 0 ? 'warn' : 'good'}
                 />
                 <StatCard
                   label="Duplicates"
-                  value={scanData.duplicates.length}
+                  value={scanData.duplicates_total}
                   tone={scanData.duplicates.length > 0 ? 'warn' : 'good'}
                 />
                 <StatCard
                   label="Errors"
-                  value={scanData.errors.length}
+                  value={scanData.errors_total}
                   tone={scanData.errors.length > 0 ? 'danger' : 'good'}
                 />
               </section>
@@ -593,13 +1012,24 @@ function App() {
                   title="Needs Review"
                   subtitle="Files that need human judgment before DTM can confidently relocate or remove them."
                 >
+                  <div className="mb-3 text-xs text-slate-500">
+                    Showing {visibleReviewFiles.length} of {scanData.review_total} review items
+                  </div>
+
+                  <QueueSortControls
+                    sortKey={reviewSortKey}
+                    sortDirection={reviewSortDirection}
+                    onSortKeyChange={setReviewSortKey}
+                    onSortDirectionChange={setReviewSortDirection}
+                  />
+
                   {scanData.review_files.length === 0 ? (
                     <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
                       No suspicious files detected in this scan.
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      {scanData.review_files.slice(0, 10).map((file) => (
+                      {visibleReviewFiles.map((file) => (
                         <div
                           key={file.path}
                           className="flex items-start gap-4 rounded-3xl border border-amber-200 bg-amber-50 p-4"
@@ -645,6 +1075,32 @@ function App() {
                           </div>
                         </div>
                       ))}
+
+                      {sortedReviewFiles.length > 8 ? (
+                        <div className="mt-4 flex gap-3">
+                          {reviewVisibleCount < sortedReviewFiles.length ? (
+                            <button
+                              onClick={() =>
+                                setReviewVisibleCount((prev) =>
+                                  Math.min(prev + 8, sortedReviewFiles.length)
+                                )
+                              }
+                              className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
+                            >
+                              Show more
+                            </button>
+                          ) : null}
+
+                          {reviewVisibleCount > 8 ? (
+                            <button
+                              onClick={() => setReviewVisibleCount(8)}
+                              className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                            >
+                              Show less
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                   )}
                 </SectionCard>
@@ -653,13 +1109,17 @@ function App() {
                   title="Duplicate Review"
                   subtitle="Potential duplicates found with the current fast heuristic."
                 >
+                  <div className="mb-3 text-xs text-slate-500">
+                    Showing {visibleDuplicates.length} of {scanData.duplicates_total} duplicate pairs
+                  </div>
+
                   {scanData.duplicates.length === 0 ? (
                     <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
                       No duplicate pairs detected in this scan.
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      {scanData.duplicates.slice(0, 8).map((pair, index) => (
+                      {visibleDuplicates.map((pair, index) => (
                         <div
                           key={`${pair[0]}-${pair[1]}-${index}`}
                           className="rounded-3xl border border-slate-200 bg-slate-50 p-4"
@@ -683,13 +1143,53 @@ function App() {
 
                             <div className="rounded-2xl bg-white p-3">
                               <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400">
-                                Possible Duplicate
+                                Duplicate
                               </div>
                               <div className="mt-2 break-all text-sm text-slate-700">{pair[1]}</div>
                             </div>
                           </div>
+
+                          <div className="mt-4 flex flex-wrap gap-3">
+                            <button
+                              onClick={() => handleArchiveDuplicate(pair[1])}
+                              disabled={busyPath === pair[1]}
+                              className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
+                                busyPath === pair[1]
+                                  ? 'cursor-not-allowed bg-slate-200 text-slate-500'
+                                  : 'bg-sky-900 text-white hover:bg-sky-700'
+                              }`}
+                            >
+                              {busyPath === pair[1] ? 'Archiving…' : 'Archive Duplicate'}
+                            </button>
+                          </div>
                         </div>
                       ))}
+
+                      {scanData.duplicates.length > 8 ? (
+                        <div className="mt-4 flex gap-3">
+                          {duplicateVisibleCount < scanData.duplicates.length ? (
+                            <button
+                              onClick={() =>
+                                setDuplicateVisibleCount((prev) =>
+                                  Math.min(prev + 8, scanData.duplicates.length)
+                                )
+                              }
+                              className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
+                            >
+                              Show more
+                            </button>
+                          ) : null}
+
+                          {duplicateVisibleCount > 8 ? (
+                            <button
+                              onClick={() => setDuplicateVisibleCount(8)}
+                              className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                            >
+                              Show less
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                   )}
                 </SectionCard>
@@ -700,13 +1200,24 @@ function App() {
                   title="Archive Candidates"
                   subtitle="Files that are likely worth keeping, but not keeping in your active workspace."
                 >
+                  <div className="mb-3 text-xs text-slate-500">
+                    Showing {visibleArchiveCandidates.length} of {scanData.archive_total} archive candidates
+                  </div>
+
+                  <QueueSortControls
+                    sortKey={archiveSortKey}
+                    sortDirection={archiveSortDirection}
+                    onSortKeyChange={setArchiveSortKey}
+                    onSortDirectionChange={setArchiveSortDirection}
+                  />
+
                   {scanData.archive_candidates.length === 0 ? (
                     <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
                       No archive candidates detected in this scan.
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      {scanData.archive_candidates.slice(0, 10).map((file) => (
+                      {visibleArchiveCandidates.map((file) => (
                         <div
                           key={file.path}
                           className="flex items-start gap-4 rounded-3xl border border-sky-200 bg-sky-50 p-4"
@@ -752,6 +1263,32 @@ function App() {
                           </div>
                         </div>
                       ))}
+
+                      {sortedArchiveCandidates.length > 8 ? (
+                        <div className="mt-4 flex gap-3">
+                          {archiveVisibleCount < sortedArchiveCandidates.length ? (
+                            <button
+                              onClick={() =>
+                                setArchiveVisibleCount((prev) =>
+                                  Math.min(prev + 8, sortedArchiveCandidates.length)
+                                )
+                              }
+                              className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
+                            >
+                              Show more
+                            </button>
+                          ) : null}
+
+                          {archiveVisibleCount > 8 ? (
+                            <button
+                              onClick={() => setArchiveVisibleCount(8)}
+                              className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                            >
+                              Show less
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                   )}
                 </SectionCard>
@@ -760,13 +1297,24 @@ function App() {
                   title="Remove Candidates"
                   subtitle="Files that appear disposable, temporary, or low-value based on current rules."
                 >
+                  <div className="mb-3 text-xs text-slate-500">
+                    Showing {visibleRemoveCandidates.length} of {scanData.remove_total} remove candidates
+                  </div>
+
+                  <QueueSortControls
+                    sortKey={removeSortKey}
+                    sortDirection={removeSortDirection}
+                    onSortKeyChange={setRemoveSortKey}
+                    onSortDirectionChange={setRemoveSortDirection}
+                  />
+
                   {scanData.remove_candidates.length === 0 ? (
                     <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
                       No remove candidates detected in this scan.
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      {scanData.remove_candidates.slice(0, 10).map((file) => (
+                      {visibleRemoveCandidates.map((file) => (
                         <div
                           key={file.path}
                           className="flex items-start gap-4 rounded-3xl border border-rose-200 bg-rose-50 p-4"
@@ -812,6 +1360,32 @@ function App() {
                           </div>
                         </div>
                       ))}
+
+                      {sortedRemoveCandidates.length > 8 ? (
+                        <div className="mt-4 flex gap-3">
+                          {removeVisibleCount < sortedRemoveCandidates.length ? (
+                            <button
+                              onClick={() =>
+                                setRemoveVisibleCount((prev) =>
+                                  Math.min(prev + 8, sortedRemoveCandidates.length)
+                                )
+                              }
+                              className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
+                            >
+                              Show more
+                            </button>
+                          ) : null}
+
+                          {removeVisibleCount > 8 ? (
+                            <button
+                              onClick={() => setRemoveVisibleCount(8)}
+                              className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                            >
+                              Show less
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                   )}
                 </SectionCard>

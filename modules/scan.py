@@ -1,15 +1,44 @@
 import os
 import json
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_TARGET = os.path.expanduser("~/Desktop")
 
+# -----------------------------
+# Safety / scale configuration
+# -----------------------------
+MAX_REVIEW_ITEMS = 100
+MAX_ARCHIVE_ITEMS = 100
+MAX_REMOVE_ITEMS = 100
+MAX_SYSTEM_ITEMS = 100
+MAX_DUPLICATES = 100
+MAX_ERRORS = 100
+
+EXCLUDED_DIR_NAMES = {
+    "node_modules",
+    ".git",
+    ".Trash",
+    "DTM Review",
+    "DTM Archive",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    ".next",
+    ".cache",
+    ".npm",
+    ".yarn",
+}
+
 SYSTEM_FILENAMES = {
     ".ds_store",
     "thumbs.db",
     "desktop.ini",
+    ".localized",
 }
 
 DOCUMENT_EXTS = {
@@ -26,7 +55,7 @@ ARCHIVE_EXTS = {
 
 CODE_EXTS = {
     ".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".yaml", ".yml",
-    ".html", ".css", ".sh", ".cjs", ".mjs"
+    ".html", ".css", ".sh", ".cjs", ".mjs", ".toml", ".rs", ".lock", ".gitignore", ".map"
 }
 
 CLUTTER_EXTS = {
@@ -38,10 +67,27 @@ APP_EXTS = {
 }
 
 
+def emit_progress(payload: dict) -> None:
+    print(json.dumps({"type": "progress", **payload}), flush=True)
+
+
+def emit_final(result: dict) -> None:
+    print(json.dumps({"type": "final", "result": result}), flush=True)
+
+
 def get_age_days(mtime: float) -> int:
     now = datetime.now(timezone.utc)
     modified = datetime.fromtimestamp(mtime, timezone.utc)
     return (now - modified).days
+
+
+def normalize_target(target_dir: str) -> str:
+    return str(Path(target_dir).expanduser().resolve())
+
+
+def is_root_or_system_heavy_target(target_dir: str) -> bool:
+    normalized = normalize_target(target_dir)
+    return normalized in {"/", str(Path.home().resolve())}
 
 
 def classify_file(filename: str, full_path: str, age_days: int, size: int) -> dict:
@@ -49,7 +95,6 @@ def classify_file(filename: str, full_path: str, age_days: int, size: int) -> di
     ext = os.path.splitext(name)[1].lower()
     normalized_path = full_path.lower()
 
-    # Exact filename rules
     if name in SYSTEM_FILENAMES:
         return {
             "category": "system",
@@ -59,7 +104,6 @@ def classify_file(filename: str, full_path: str, age_days: int, size: int) -> di
             "ui_visibility": "hidden_by_default",
         }
 
-    # Path-sensitive rules
     if "/node_modules/" in normalized_path:
         return {
             "category": "code",
@@ -78,7 +122,15 @@ def classify_file(filename: str, full_path: str, age_days: int, size: int) -> di
             "ui_visibility": "hidden_by_default",
         }
 
-    # Extension-based rules
+    if "/dtm review/" in normalized_path or "/dtm archive/" in normalized_path:
+        return {
+            "category": "system",
+            "confidence": "high",
+            "recommended_action": "ignore",
+            "reason": "DTM-managed file in a controlled workflow folder.",
+            "ui_visibility": "hidden_by_default",
+        }
+
     if ext in DOCUMENT_EXTS:
         return {
             "category": "document",
@@ -112,7 +164,7 @@ def classify_file(filename: str, full_path: str, age_days: int, size: int) -> di
             "category": "code",
             "confidence": "high",
             "recommended_action": "keep",
-            "reason": "Code or configuration file.",
+            "reason": "Code, configuration, or development support file.",
             "ui_visibility": "normal",
         }
 
@@ -144,7 +196,6 @@ def classify_file(filename: str, full_path: str, age_days: int, size: int) -> di
             "ui_visibility": "normal",
         }
 
-    # Fallback
     return {
         "category": "unknown",
         "confidence": "low",
@@ -154,12 +205,79 @@ def classify_file(filename: str, full_path: str, age_days: int, size: int) -> di
     }
 
 
-def scan_folder(target_dir: str) -> dict:
-    files = []
-    signatures = {}
-    duplicates = []
+def maybe_append(bucket: list, item, cap: int) -> None:
+    if len(bucket) < cap:
+        bucket.append(item)
 
-    for root, _, filenames in os.walk(target_dir):
+
+def scan_folder(target_dir: str) -> dict:
+    target_dir = normalize_target(target_dir)
+    started_at = time.time()
+    last_progress_emit = started_at
+
+    files_scanned = 0
+    by_ext = {}
+    duplicates_seen = {}
+    duplicate_items = []
+
+    review_files = []
+    system_files = []
+    archive_candidates = []
+    remove_candidates = []
+    errors = []
+
+    review_total = 0
+    system_total = 0
+    archive_total = 0
+    remove_total = 0
+    duplicates_total = 0
+    excluded_dirs_count = 0
+
+    age_buckets = {
+        "<30d": 0,
+        "30-180d": 0,
+        ">180d": 0,
+    }
+
+    scan_warnings = []
+    if is_root_or_system_heavy_target(target_dir):
+        scan_warnings.append(
+            "Large or system-heavy scan target detected. Results are summarized and detailed queues are capped for safety."
+        )
+
+    emit_progress({
+        "status": "starting",
+        "target": target_dir,
+        "files_scanned": 0,
+        "current_path": target_dir,
+        "elapsed_seconds": 0,
+        "review_total": 0,
+        "archive_total": 0,
+        "remove_total": 0,
+        "duplicates_total": 0,
+    })
+
+    for root, dirs, filenames in os.walk(target_dir, topdown=True):
+        original_dir_count = len(dirs)
+        dirs[:] = [d for d in dirs if d not in EXCLUDED_DIR_NAMES]
+        excluded_dirs_count += original_dir_count - len(dirs)
+
+        now = time.time()
+        if now - last_progress_emit >= 0.5:
+            emit_progress({
+                "status": "scanning",
+                "target": target_dir,
+                "files_scanned": files_scanned,
+                "current_path": root,
+                "elapsed_seconds": round(now - started_at, 1),
+                "review_total": review_total,
+                "archive_total": archive_total,
+                "remove_total": remove_total,
+                "duplicates_total": duplicates_total,
+                "excluded_dirs_count": excluded_dirs_count,
+            })
+            last_progress_emit = now
+
         for filename in filenames:
             full_path = os.path.join(root, filename)
 
@@ -169,6 +287,17 @@ def scan_folder(target_dir: str) -> dict:
                 age_days = get_age_days(stat.st_mtime)
                 ext = os.path.splitext(filename)[1].lower() or "no_ext"
 
+                files_scanned += 1
+
+                if age_days < 30:
+                    age_buckets["<30d"] += 1
+                elif age_days <= 180:
+                    age_buckets["30-180d"] += 1
+                else:
+                    age_buckets[">180d"] += 1
+
+                by_ext[ext] = by_ext.get(ext, 0) + 1
+
                 classification = classify_file(filename, full_path, age_days, size)
 
                 entry = {
@@ -177,7 +306,7 @@ def scan_folder(target_dir: str) -> dict:
                     "size": size,
                     "age_days": age_days,
                     "ext": ext,
-                    "hash": None,  # paused for dev speed
+                    "hash": None,
                     "category": classification["category"],
                     "confidence": classification["confidence"],
                     "recommended_action": classification["recommended_action"],
@@ -185,73 +314,93 @@ def scan_folder(target_dir: str) -> dict:
                     "ui_visibility": classification["ui_visibility"],
                 }
 
-                # Fast duplicate heuristic for dev mode
-                sig = (filename.lower(), size)
-                if sig in signatures:
-                    duplicates.append([signatures[sig], full_path])
-                else:
-                    signatures[sig] = full_path
+                action = entry["recommended_action"]
+                category = entry["category"]
 
-                files.append(entry)
+                if action == "review":
+                    review_total += 1
+                    maybe_append(review_files, entry, MAX_REVIEW_ITEMS)
+
+                if action == "archive":
+                    archive_total += 1
+                    maybe_append(archive_candidates, entry, MAX_ARCHIVE_ITEMS)
+
+                if action == "remove":
+                    remove_total += 1
+                    maybe_append(remove_candidates, entry, MAX_REMOVE_ITEMS)
+
+                if category == "system":
+                    system_total += 1
+                    maybe_append(system_files, entry, MAX_SYSTEM_ITEMS)
+
+                sig = (filename.lower(), size)
+                if sig in duplicates_seen:
+                    duplicates_total += 1
+                    maybe_append(duplicate_items, [duplicates_seen[sig], full_path], MAX_DUPLICATES)
+                else:
+                    duplicates_seen[sig] = full_path
 
             except Exception as e:
-                files.append({
-                    "name": filename,
-                    "path": full_path,
-                    "error": str(e),
-                })
+                maybe_append(
+                    errors,
+                    {
+                        "name": filename,
+                        "path": full_path,
+                        "error": str(e),
+                    },
+                    MAX_ERRORS
+                )
 
-    by_ext = {}
-    review_files = []
-    system_files = []
-    archive_candidates = []
-    remove_candidates = []
-
-    for f in files:
-        ext = f.get("ext")
-        if ext:
-            by_ext[ext] = by_ext.get(ext, 0) + 1
-
-        action = f.get("recommended_action")
-        category = f.get("category")
-
-        if action == "review":
-            review_files.append(f)
-
-        if action == "archive":
-            archive_candidates.append(f)
-
-        if action == "remove":
-            remove_candidates.append(f)
-
-        if category == "system":
-            system_files.append(f)
+    sorted_ext = dict(sorted(by_ext.items(), key=lambda item: item[1], reverse=True))
 
     result = {
         "scanned_at": datetime.now(timezone.utc).isoformat(),
         "folder": target_dir,
-        "mode": "dev-fast",
-        "total_files": len([f for f in files if "error" not in f]),
-        "files": files,
+        "mode": "bounded-safe",
+        "scan_warnings": scan_warnings,
+        "total_files": files_scanned,
         "review_files": review_files,
+        "review_total": review_total,
         "system_files": system_files,
+        "system_total": system_total,
         "archive_candidates": archive_candidates,
+        "archive_total": archive_total,
         "remove_candidates": remove_candidates,
-        "duplicates": duplicates,
-        "age_buckets": {
-            "<30d": sum(1 for f in files if f.get("age_days", -1) >= 0 and f["age_days"] < 30),
-            "30-180d": sum(1 for f in files if 30 <= f.get("age_days", -1) <= 180),
-            ">180d": sum(1 for f in files if f.get("age_days", -1) > 180),
+        "remove_total": remove_total,
+        "duplicates": duplicate_items,
+        "duplicates_total": duplicates_total,
+        "age_buckets": age_buckets,
+        "by_ext": sorted_ext,
+        "errors": errors,
+        "errors_total": len(errors),
+        "excluded_dirs_count": excluded_dirs_count,
+        "detail_caps": {
+            "review_files": MAX_REVIEW_ITEMS,
+            "system_files": MAX_SYSTEM_ITEMS,
+            "archive_candidates": MAX_ARCHIVE_ITEMS,
+            "remove_candidates": MAX_REMOVE_ITEMS,
+            "duplicates": MAX_DUPLICATES,
+            "errors": MAX_ERRORS,
         },
-        "by_ext": dict(sorted(by_ext.items(), key=lambda item: item[1], reverse=True)),
-        "errors": [f for f in files if "error" in f],
     }
+
+    emit_progress({
+        "status": "finalizing",
+        "target": target_dir,
+        "files_scanned": files_scanned,
+        "current_path": target_dir,
+        "elapsed_seconds": round(time.time() - started_at, 1),
+        "review_total": review_total,
+        "archive_total": archive_total,
+        "remove_total": remove_total,
+        "duplicates_total": duplicates_total,
+        "excluded_dirs_count": excluded_dirs_count,
+    })
 
     return result
 
 
 if __name__ == "__main__":
     target = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_TARGET
-    target = str(Path(target).expanduser())
-
-    print(json.dumps(scan_folder(target), indent=2))
+    result = scan_folder(target)
+    emit_final(result)
