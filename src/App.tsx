@@ -132,16 +132,21 @@ function ModePill({
   active,
   label,
   onClick,
+  disabled = false,
 }: {
   active: boolean;
   label: string;
   onClick: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-        active
+        disabled
+          ? 'cursor-not-allowed bg-slate-100 text-slate-400'
+          : active
           ? 'bg-slate-900 text-white shadow-sm'
           : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
       }`}
@@ -156,11 +161,13 @@ function QueueSortControls({
   sortDirection,
   onSortKeyChange,
   onSortDirectionChange,
+  disabled = false,
 }: {
   sortKey: SortKey;
   sortDirection: SortDirection;
   onSortKeyChange: (value: SortKey) => void;
   onSortDirectionChange: (value: SortDirection) => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="mb-4 flex flex-wrap items-center gap-3">
@@ -170,8 +177,9 @@ function QueueSortControls({
         </label>
         <select
           value={sortKey}
+          disabled={disabled}
           onChange={(e) => onSortKeyChange(e.target.value as SortKey)}
-          className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+          className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
         >
           <option value="confidence">Confidence</option>
           <option value="age_days">Age</option>
@@ -186,8 +194,9 @@ function QueueSortControls({
         </label>
         <select
           value={sortDirection}
+          disabled={disabled}
           onChange={(e) => onSortDirectionChange(e.target.value as SortDirection)}
-          className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+          className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
         >
           <option value="asc">Ascending</option>
           <option value="desc">Descending</option>
@@ -268,6 +277,14 @@ function App() {
     excluded_dirs_count?: number;
   } | null>(null);
 
+  const [isBulkActing, setIsBulkActing] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<{
+    action: 'review' | 'archive' | 'remove';
+    current: number;
+    total: number;
+    currentFileName: string;
+  } | null>(null);
+
   const [reviewSortKey, setReviewSortKey] = useState<SortKey>('confidence');
   const [reviewSortDirection, setReviewSortDirection] = useState<SortDirection>('asc');
 
@@ -284,7 +301,7 @@ function App() {
   const [duplicateVisibleCount, setDuplicateVisibleCount] = useState(8);
 
   useEffect(() => {
-    window.electronAPI?.onScanFinished?.((data: { output?: string }) => {
+    const unsubscribeFinished = window.electronAPI?.onScanFinished?.((data: { output?: string }) => {
       const output = data.output || 'Scan completed with no output.';
       setScanOutput(output);
       setIsScanning(false);
@@ -293,7 +310,6 @@ function App() {
       setReviewVisibleCount(8);
       setArchiveVisibleCount(8);
       setRemoveVisibleCount(8);
-
       setDuplicateVisibleCount(8);
 
       try {
@@ -304,7 +320,7 @@ function App() {
       }
     });
 
-    window.electronAPI?.onScanProgress?.((data) => {
+    const unsubscribeProgress = window.electronAPI?.onScanProgress?.((data) => {
       setScanProgress({
         status: data.status,
         target: data.target,
@@ -318,6 +334,11 @@ function App() {
         excluded_dirs_count: data.excluded_dirs_count,
       });
     });
+
+    return () => {
+      unsubscribeFinished?.();
+      unsubscribeProgress?.();
+    };
   }, []);
 
   const scanTargetLabel = useMemo(() => {
@@ -373,7 +394,16 @@ function App() {
   }, [scanData, duplicateVisibleCount]);
 
   const handleScan = () => {
+    if (isBulkActing) {
+      setActionStatus({
+        tone: 'error',
+        message: 'Bulk action in progress. Please wait until it finishes before starting a new scan.',
+      });
+      return;
+    }
+
     setScanProgress(null);
+
     if (scanPreset === 'custom' && !customPath.trim()) {
       setActionStatus({
         tone: 'error',
@@ -382,7 +412,8 @@ function App() {
       return;
     }
 
-  const normalizedCustomPath = customPath.trim();
+    const normalizedCustomPath = customPath.trim();
+
     if (scanPreset === 'custom' && normalizedCustomPath === '/') {
       setActionStatus({
         tone: 'error',
@@ -399,7 +430,7 @@ function App() {
 
     window.electronAPI?.sendScanRequest?.({
       preset: scanPreset,
-      customPath: customPath.trim(),
+      customPath: normalizedCustomPath,
     });
   };
 
@@ -455,32 +486,18 @@ function App() {
   };
 
   const handleMoveToReview = async (filePath: string) => {
+    if (isBulkActing) return;
+
     setBusyPath(filePath);
     setActionStatus(null);
 
     try {
-      const result = await window.electronAPI?.moveToReview?.(filePath);
+      const result = await performQueueAction('review', filePath);
 
-      if (result?.success) {
-        setActionStatus({
-          tone: 'success',
-          message: result.destination
-            ? `Moved to DTM Review: ${result.destination}`
-            : result.message,
-        });
-        removePathFromQueues(filePath, 'review');
-
-        // Refresh current scan after action
-        window.electronAPI?.sendScanRequest?.({
-          preset: scanPreset,
-          customPath: customPath.trim(),
-        });
-      } else {
-        setActionStatus({
-          tone: 'error',
-          message: result?.message || 'Failed to move file to DTM Review.',
-        });
-      }
+      setActionStatus({
+        tone: result.success ? 'success' : 'error',
+        message: result.message,
+      });
     } catch (error) {
       setActionStatus({
         tone: 'error',
@@ -492,31 +509,18 @@ function App() {
   };
 
   const handleMoveToArchive = async (filePath: string) => {
+    if (isBulkActing) return;
+
     setBusyPath(filePath);
     setActionStatus(null);
 
     try {
-      const result = await window.electronAPI?.moveToArchive?.(filePath);
+      const result = await performQueueAction('archive', filePath);
 
-      if (result?.success) {
-        setActionStatus({
-          tone: 'success',
-          message: result.destination
-            ? `Moved to DTM Archive: ${result.destination}`
-            : result.message,
-        });
-        removePathFromQueues(filePath, 'archive');
-
-        window.electronAPI?.sendScanRequest?.({
-          preset: scanPreset,
-          customPath: customPath.trim(),
-        });
-      } else {
-        setActionStatus({
-          tone: 'error',
-          message: result?.message || 'Failed to move file to DTM Archive.',
-        });
-      }
+      setActionStatus({
+        tone: result.success ? 'success' : 'error',
+        message: result.message,
+      });
     } catch (error) {
       setActionStatus({
         tone: 'error',
@@ -528,31 +532,18 @@ function App() {
   };
 
   const handleMoveToTrash = async (filePath: string) => {
+    if (isBulkActing) return;
+
     setBusyPath(filePath);
     setActionStatus(null);
 
     try {
-      const result = await window.electronAPI?.moveToTrash?.(filePath);
+      const result = await performQueueAction('remove', filePath);
 
-      if (result?.success) {
-        setActionStatus({
-          tone: 'success',
-          message: result.destination
-            ? `Moved to Trash: ${result.destination}`
-            : result.message,
-        });
-        removePathFromQueues(filePath, 'remove');
-
-        window.electronAPI?.sendScanRequest?.({
-          preset: scanPreset,
-          customPath: customPath.trim(),
-        });
-      } else {
-        setActionStatus({
-          tone: 'error',
-          message: result?.message || 'Failed to move file to Trash.',
-        });
-      }
+      setActionStatus({
+        tone: result.success ? 'success' : 'error',
+        message: result.message,
+      });
     } catch (error) {
       setActionStatus({
         tone: 'error',
@@ -662,6 +653,165 @@ function App() {
     return sortedRemoveCandidates.slice(0, removeVisibleCount);
   }, [sortedRemoveCandidates, removeVisibleCount]);
 
+  const getCurrentScanPayload = () => ({
+    preset: scanPreset,
+    customPath: customPath.trim(),
+  });
+
+  const triggerRescan = () => {
+    setIsScanning(true);
+    setScanProgress(null);
+    setScanOutput(`Refreshing ${scanTargetLabel} after changes...`);
+    window.electronAPI?.sendScanRequest?.(getCurrentScanPayload());
+  };
+
+  const invokeAction = async (
+    actionType: 'review' | 'archive' | 'remove',
+    filePath: string
+  ) => {
+    if (actionType === 'review') {
+      return await window.electronAPI?.moveToReview?.(filePath);
+    }
+
+    if (actionType === 'archive') {
+      return await window.electronAPI?.moveToArchive?.(filePath);
+    }
+
+    return await window.electronAPI?.moveToTrash?.(filePath);
+  };
+
+  const getSuccessMessage = (
+    actionType: 'review' | 'archive' | 'remove',
+    result: { destination?: string; message?: string }
+  ) => {
+    if (result.destination) {
+      if (actionType === 'review') {
+        return `Moved to DTM Review: ${result.destination}`;
+      }
+
+      if (actionType === 'archive') {
+        return `Moved to DTM Archive: ${result.destination}`;
+      }
+
+      return `Moved to Trash: ${result.destination}`;
+    }
+
+    return result.message || 'Action completed successfully.';
+  };
+
+  const performQueueAction = async (
+    actionType: 'review' | 'archive' | 'remove',
+    filePath: string,
+    options?: { rescanAfterSuccess?: boolean }
+  ) => {
+    const rescanAfterSuccess = options?.rescanAfterSuccess ?? true;
+
+    const result = await invokeAction(actionType, filePath);
+
+    if (result?.success) {
+      removePathFromQueues(filePath, actionType);
+
+      if (rescanAfterSuccess) {
+        triggerRescan();
+      }
+
+      return {
+        success: true,
+        message: getSuccessMessage(actionType, result),
+      };
+    }
+
+    return {
+      success: false,
+      message:
+        result?.message ||
+        (actionType === 'review'
+          ? 'Failed to move file to DTM Review.'
+          : actionType === 'archive'
+          ? 'Failed to move file to DTM Archive.'
+          : 'Failed to move file to Trash.'),
+    };
+  };
+
+  const handleBulkQueueAction = async (
+    actionType: 'review' | 'archive' | 'remove',
+    files: ClassifiedFile[]
+  ) => {
+    if (isBulkActing || isScanning || files.length === 0) {
+      return;
+    }
+
+    setIsBulkActing(true);
+    setBusyPath(null);
+    setActionStatus(null);
+
+    let successCount = 0;
+    let failureCount = 0;
+
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+
+      setBulkProgress({
+        action: actionType,
+        current: index + 1,
+        total: files.length,
+        currentFileName: file.name,
+      });
+
+      try {
+        const result = await performQueueAction(actionType, file.path, {
+          rescanAfterSuccess: false,
+        });
+
+        if (result.success) {
+          successCount += 1;
+        } else {
+          failureCount += 1;
+        }
+      } catch {
+        failureCount += 1;
+      }
+    }
+
+    setBulkProgress(null);
+    setIsBulkActing(false);
+
+    if (successCount > 0) {
+      triggerRescan();
+    }
+
+    const actionLabel =
+      actionType === 'review'
+        ? 'moved to DTM Review'
+        : actionType === 'archive'
+        ? 'moved to DTM Archive'
+        : 'moved to Trash';
+
+    if (failureCount === 0) {
+      setActionStatus({
+        tone: 'success',
+        message: `Bulk action complete: ${successCount} file${successCount === 1 ? '' : 's'} ${actionLabel}.`,
+      });
+    } else {
+      setActionStatus({
+        tone: 'error',
+        message: `Bulk action finished with partial success: ${successCount} succeeded, ${failureCount} failed.`,
+      });
+    }
+  };
+
+  const handleBulkMoveToReview = async () => {
+    await handleBulkQueueAction('review', visibleReviewFiles);
+  };
+
+  const handleBulkMoveToArchive = async () => {
+    await handleBulkQueueAction('archive', visibleArchiveCandidates);
+  };
+
+  const handleBulkMoveToTrash = async () => {
+    await handleBulkQueueAction('remove', visibleRemoveCandidates);
+  };
+
   return (
     <div className="min-h-screen bg-[#f7f7f2] text-slate-900">
       <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-6 py-8 md:px-8 lg:px-10">
@@ -696,26 +846,31 @@ function App() {
               <ModePill
                 active={scanPreset === 'test'}
                 label="Test Folder"
+                disabled={isBulkActing}
                 onClick={() => setScanPreset('test')}
               />
               <ModePill
                 active={scanPreset === 'desktop'}
                 label="Desktop"
+                disabled={isBulkActing}
                 onClick={() => setScanPreset('desktop')}
               />
               <ModePill
                 active={scanPreset === 'downloads'}
                 label="Downloads"
+                disabled={isBulkActing}
                 onClick={() => setScanPreset('downloads')}
               />
               <ModePill
                 active={scanPreset === 'documents'}
                 label="Documents"
+                disabled={isBulkActing}
                 onClick={() => setScanPreset('documents')}
               />
               <ModePill
                 active={scanPreset === 'custom'}
                 label="Custom"
+                disabled={isBulkActing}
                 onClick={() => setScanPreset('custom')}
               />
             </div>
@@ -734,6 +889,7 @@ function App() {
                     id="custom-path"
                     type="text"
                     value={customPath}
+                    disabled={isBulkActing}
                     onChange={(e) => setCustomPath(e.target.value)}
                     placeholder="/Users/yourname/Documents/example-folder"
                     className="flex-1 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
@@ -742,6 +898,7 @@ function App() {
                   <button
                     type="button"
                     onClick={handleBrowseForFolder}
+                    disabled={isBulkActing}
                     className="rounded-2xl bg-slate-100 px-4 py-3 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
                   >
                     Browse…
@@ -781,6 +938,26 @@ function App() {
               }`}
             >
               <p className="text-sm font-medium">{actionStatus.message}</p>
+            </section>
+          ) : null}
+
+          {isBulkActing && bulkProgress ? (
+            <section className="rounded-[2rem] border border-violet-200 bg-violet-50 p-6 shadow-sm">
+              <div className="flex items-start gap-4">
+                <div className="mt-1 h-3 w-3 rounded-full bg-violet-500" />
+                <div>
+                  <h3 className="text-lg font-semibold text-violet-900">
+                    Bulk action in progress
+                  </h3>
+                  <p className="mt-1 text-sm leading-6 text-violet-800">
+                    Processing {bulkProgress.current} of {bulkProgress.total}:{' '}
+                    <span className="font-medium">{bulkProgress.currentFileName}</span>
+                  </p>
+                  <p className="mt-2 text-xs uppercase tracking-[0.18em] text-violet-600">
+                    Action: {bulkProgress.action}
+                  </p>
+                </div>
+              </div>
             </section>
           ) : null}
 
@@ -1012,16 +1189,39 @@ function App() {
                   title="Needs Review"
                   subtitle="Files that need human judgment before DTM can confidently relocate or remove them."
                 >
-                  <div className="mb-3 text-xs text-slate-500">
-                    Showing {visibleReviewFiles.length} of {scanData.review_total} review items
-                  </div>
+                  {sortedReviewFiles.length > 0 ? (
+                    <div className="mb-3 text-xs text-slate-500">
+                      Showing {visibleReviewFiles.length} of {scanData.review_total} review items
+                    </div>
+                  ) : null}
 
-                  <QueueSortControls
-                    sortKey={reviewSortKey}
-                    sortDirection={reviewSortDirection}
-                    onSortKeyChange={setReviewSortKey}
-                    onSortDirectionChange={setReviewSortDirection}
-                  />
+                  {visibleReviewFiles.length > 0 ? (
+                    <div className="mb-4 flex flex-wrap gap-3">
+                      <button
+                        onClick={handleBulkMoveToReview}
+                        disabled={
+                          isBulkActing ||
+                          isScanning ||
+                          visibleReviewFiles.length === 0
+                        }
+                        className="rounded-full bg-amber-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                      >
+                        {isBulkActing && bulkProgress?.action === 'review'
+                          ? 'Bulk moving…'
+                          : `Move visible ${visibleReviewFiles.length} to Review`}
+                      </button>
+                    </div>
+                  ) : null}
+
+                  {sortedReviewFiles.length > 0 ? (
+                    <QueueSortControls
+                      sortKey={reviewSortKey}
+                      sortDirection={reviewSortDirection}
+                      onSortKeyChange={setReviewSortKey}
+                      onSortDirectionChange={setReviewSortDirection}
+                      disabled={isBulkActing}
+                    />
+                  ) : null}
 
                   {scanData.review_files.length === 0 ? (
                     <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
@@ -1062,7 +1262,7 @@ function App() {
                             <div className="mt-4 flex flex-wrap gap-3">
                               <button
                                 onClick={() => handleMoveToReview(file.path)}
-                                disabled={busyPath === file.path}
+                                disabled={busyPath === file.path || isBulkActing}
                                 className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
                                   busyPath === file.path
                                     ? 'cursor-not-allowed bg-slate-200 text-slate-500'
@@ -1109,9 +1309,11 @@ function App() {
                   title="Duplicate Review"
                   subtitle="Potential duplicates found with the current fast heuristic."
                 >
-                  <div className="mb-3 text-xs text-slate-500">
-                    Showing {visibleDuplicates.length} of {scanData.duplicates_total} duplicate pairs
-                  </div>
+                  {visibleDuplicates.length > 0 ? (
+                    <div className="mb-3 text-xs text-slate-500">
+                      Showing {visibleDuplicates.length} of {scanData.duplicates_total} duplicate pairs
+                    </div>
+                  ) : null}
 
                   {scanData.duplicates.length === 0 ? (
                     <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
@@ -1152,7 +1354,7 @@ function App() {
                           <div className="mt-4 flex flex-wrap gap-3">
                             <button
                               onClick={() => handleArchiveDuplicate(pair[1])}
-                              disabled={busyPath === pair[1]}
+                              disabled={busyPath === pair[1] || isBulkActing}
                               className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
                                 busyPath === pair[1]
                                   ? 'cursor-not-allowed bg-slate-200 text-slate-500'
@@ -1200,16 +1402,39 @@ function App() {
                   title="Archive Candidates"
                   subtitle="Files that are likely worth keeping, but not keeping in your active workspace."
                 >
-                  <div className="mb-3 text-xs text-slate-500">
-                    Showing {visibleArchiveCandidates.length} of {scanData.archive_total} archive candidates
-                  </div>
+                  {sortedArchiveCandidates.length > 0 ? ( 
+                    <div className="mb-3 text-xs text-slate-500">
+                      Showing {visibleArchiveCandidates.length} of {scanData.archive_total} archive candidates
+                    </div>
+                  ) : null}
+                  
+                  {visibleArchiveCandidates.length > 0 ? ( 
+                    <div className="mb-4 flex flex-wrap gap-3">
+                      <button
+                        onClick={handleBulkMoveToArchive}
+                        disabled={
+                          isBulkActing ||
+                          isScanning ||
+                          visibleArchiveCandidates.length === 0
+                        }
+                        className="rounded-full bg-sky-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                      >
+                        {isBulkActing && bulkProgress?.action === 'archive'
+                          ? 'Bulk archiving…'
+                          : `Move visible ${visibleArchiveCandidates.length} to Archive`}
+                      </button>
+                    </div>
+                  ) : null}
 
-                  <QueueSortControls
-                    sortKey={archiveSortKey}
-                    sortDirection={archiveSortDirection}
-                    onSortKeyChange={setArchiveSortKey}
-                    onSortDirectionChange={setArchiveSortDirection}
-                  />
+                  {sortedArchiveCandidates.length > 0 ? (
+                    <QueueSortControls
+                      sortKey={archiveSortKey}
+                      sortDirection={archiveSortDirection}
+                      onSortKeyChange={setArchiveSortKey}
+                      onSortDirectionChange={setArchiveSortDirection}
+                      disabled={isBulkActing}
+                    />
+                  ) : null}
 
                   {scanData.archive_candidates.length === 0 ? (
                     <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
@@ -1250,7 +1475,7 @@ function App() {
                             <div className="mt-4 flex flex-wrap gap-3">
                               <button
                                 onClick={() => handleMoveToArchive(file.path)}
-                                disabled={busyPath === file.path}
+                                disabled={busyPath === file.path || isBulkActing}
                                 className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
                                   busyPath === file.path
                                     ? 'cursor-not-allowed bg-slate-200 text-slate-500'
@@ -1297,16 +1522,39 @@ function App() {
                   title="Remove Candidates"
                   subtitle="Files that appear disposable, temporary, or low-value based on current rules."
                 >
-                  <div className="mb-3 text-xs text-slate-500">
-                    Showing {visibleRemoveCandidates.length} of {scanData.remove_total} remove candidates
-                  </div>
+                  {sortedRemoveCandidates.length > 0 ? (
+                    <div className="mb-3 text-xs text-slate-500">
+                      Showing {visibleRemoveCandidates.length} of {scanData.remove_total} remove candidates
+                    </div>
+                  ) : null}
 
-                  <QueueSortControls
-                    sortKey={removeSortKey}
-                    sortDirection={removeSortDirection}
-                    onSortKeyChange={setRemoveSortKey}
-                    onSortDirectionChange={setRemoveSortDirection}
-                  />
+                  {visibleRemoveCandidates.length > 0 ? (
+                    <div className="mb-4 flex flex-wrap gap-3">
+                      <button
+                        onClick={handleBulkMoveToTrash}
+                        disabled={
+                          isBulkActing ||
+                          isScanning ||
+                          visibleRemoveCandidates.length === 0
+                        }
+                        className="rounded-full bg-rose-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-rose-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                      >
+                        {isBulkActing && bulkProgress?.action === 'remove'
+                          ? 'Bulk removing…'
+                          : `Move visible ${visibleRemoveCandidates.length} to Trash`}
+                      </button>
+                    </div>
+                  ) : null}
+
+                  {sortedRemoveCandidates.length > 0 ? (
+                    <QueueSortControls
+                      sortKey={removeSortKey}
+                      sortDirection={removeSortDirection}
+                      onSortKeyChange={setRemoveSortKey}
+                      onSortDirectionChange={setRemoveSortDirection}
+                      disabled={isBulkActing}
+                    />
+                  ) : null}
 
                   {scanData.remove_candidates.length === 0 ? (
                     <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
@@ -1347,7 +1595,7 @@ function App() {
                             <div className="mt-4 flex flex-wrap gap-3">
                               <button
                                 onClick={() => handleMoveToTrash(file.path)}
-                                disabled={busyPath === file.path}
+                                disabled={busyPath === file.path || isBulkActing}
                                 className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
                                   busyPath === file.path
                                     ? 'cursor-not-allowed bg-slate-200 text-slate-500'

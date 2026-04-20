@@ -2,10 +2,18 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   sendScanRequest: (payload) => ipcRenderer.send('scan-desktop', payload),
-  onScanFinished: (callback) =>
-    ipcRenderer.on('scan-finished', (_event, data) => callback(data)),
-  onScanProgress: (callback) =>
-    ipcRenderer.on('scan-progress', (_event, data) => callback(data)),
+
+  onScanFinished: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('scan-finished', handler);
+    return () => ipcRenderer.removeListener('scan-finished', handler);
+  },
+
+  onScanProgress: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('scan-progress', handler);
+    return () => ipcRenderer.removeListener('scan-progress', handler);
+  },
 
   moveToReview: (filePath) => ipcRenderer.invoke('move-to-review', { filePath }),
   moveToArchive: (filePath) => ipcRenderer.invoke('move-to-archive', { filePath }),

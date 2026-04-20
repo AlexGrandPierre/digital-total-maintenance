@@ -36,8 +36,8 @@ type ScanProgress = {
 
 interface ElectronAPI {
   sendScanRequest?: (payload: ScanRequestPayload) => void;
-  onScanFinished?: (callback: (data: { output?: string }) => void) => void;
-  onScanProgress?: (callback: (data: ScanProgress) => void) => void;
+  onScanFinished?: (callback: (data: { output?: string }) => void) => () => void;
+  onScanProgress?: (callback: (data: ScanProgress) => void) => () => void;
   moveToReview?: (filePath: string) => Promise<ActionResult>;
   moveToArchive?: (filePath: string) => Promise<ActionResult>;
   moveToTrash?: (filePath: string) => Promise<ActionResult>;
