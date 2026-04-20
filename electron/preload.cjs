@@ -15,8 +15,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('scan-progress', handler);
   },
 
-  moveToReview: (filePath) => ipcRenderer.invoke('move-to-review', { filePath }),
-  moveToArchive: (filePath) => ipcRenderer.invoke('move-to-archive', { filePath }),
-  moveToTrash: (filePath) => ipcRenderer.invoke('move-to-trash', { filePath }),
+  moveToReview: (filePath, mode = 'single') =>
+    ipcRenderer.invoke('move-to-review', { filePath, mode }),
+
+  moveToArchive: (filePath, mode = 'single') =>
+    ipcRenderer.invoke('move-to-archive', { filePath, mode }),
+
+  moveToTrash: (filePath, mode = 'single') =>
+    ipcRenderer.invoke('move-to-trash', { filePath, mode }),
+
   browseForFolder: () => ipcRenderer.invoke('browse-for-folder'),
+  getActionHistory: (limit = 20) => ipcRenderer.invoke('get-action-history', { limit }),
 });

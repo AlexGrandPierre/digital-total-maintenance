@@ -300,6 +300,8 @@ function App() {
 
   const [duplicateVisibleCount, setDuplicateVisibleCount] = useState(8);
 
+  const [actionHistory, setActionHistory] = useState<ActionHistoryEntry[]>([]);
+
   useEffect(() => {
     const unsubscribeFinished = window.electronAPI?.onScanFinished?.((data: { output?: string }) => {
       const output = data.output || 'Scan completed with no output.';
@@ -311,6 +313,8 @@ function App() {
       setArchiveVisibleCount(8);
       setRemoveVisibleCount(8);
       setDuplicateVisibleCount(8);
+
+      loadActionHistory();
 
       try {
         const parsed = JSON.parse(output);
@@ -385,6 +389,15 @@ function App() {
         tone: 'error',
         message: error instanceof Error ? error.message : 'Failed to open folder picker.',
       });
+    }
+  };
+
+  const loadActionHistory = async () => {
+    try {
+      const history = await window.electronAPI?.getActionHistory?.(12);
+      setActionHistory(history || []);
+    } catch {
+      setActionHistory([]);
     }
   };
 
@@ -559,7 +572,7 @@ function App() {
     setActionStatus(null);
   
     try {
-      const result = await window.electronAPI?.moveToArchive?.(duplicatePath);
+      const result = await window.electronAPI?.moveToArchive?.(duplicatePath, 'single');
   
       if (result?.success) {
         setActionStatus({
@@ -570,6 +583,8 @@ function App() {
         });
   
         removeDuplicateFromQueue(duplicatePath);
+
+        await loadActionHistory();
   
         window.electronAPI?.sendScanRequest?.({
           preset: scanPreset,
@@ -667,17 +682,18 @@ function App() {
 
   const invokeAction = async (
     actionType: 'review' | 'archive' | 'remove',
-    filePath: string
+    filePath: string,
+    mode: 'single' | 'bulk' = 'single'
   ) => {
     if (actionType === 'review') {
-      return await window.electronAPI?.moveToReview?.(filePath);
+      return await window.electronAPI?.moveToReview?.(filePath, mode);
     }
 
     if (actionType === 'archive') {
-      return await window.electronAPI?.moveToArchive?.(filePath);
+      return await window.electronAPI?.moveToArchive?.(filePath, mode);
     }
 
-    return await window.electronAPI?.moveToTrash?.(filePath);
+    return await window.electronAPI?.moveToTrash?.(filePath, mode);
   };
 
   const getSuccessMessage = (
@@ -702,14 +718,17 @@ function App() {
   const performQueueAction = async (
     actionType: 'review' | 'archive' | 'remove',
     filePath: string,
-    options?: { rescanAfterSuccess?: boolean }
+    options?: { rescanAfterSuccess?: boolean; mode?: 'single' | 'bulk' }
   ) => {
     const rescanAfterSuccess = options?.rescanAfterSuccess ?? true;
+    const mode = options?.mode ?? 'single';
 
-    const result = await invokeAction(actionType, filePath);
+    const result = await invokeAction(actionType, filePath, mode);
 
     if (result?.success) {
       removePathFromQueues(filePath, actionType);
+
+      await loadActionHistory();
 
       if (rescanAfterSuccess) {
         triggerRescan();
@@ -761,6 +780,7 @@ function App() {
       try {
         const result = await performQueueAction(actionType, file.path, {
           rescanAfterSuccess: false,
+          mode: 'bulk',
         });
 
         if (result.success) {
@@ -1151,6 +1171,65 @@ function App() {
                   tone={scanData.errors.length > 0 ? 'danger' : 'good'}
                 />
               </section>
+
+              <SectionCard
+                title="Recent Actions"
+                subtitle="A local record of successful maintenance actions performed by DTM."
+              >
+                {actionHistory.length === 0 ? (
+                  <p className="text-sm text-slate-500">No actions have been logged yet.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {actionHistory.map((entry) => {
+                      const filename = entry.source_path.split('/').pop() || entry.source_path;
+
+                      const actionLabel =
+                        entry.action === 'move_to_review'
+                          ? 'Moved to Review'
+                          : entry.action === 'move_to_archive'
+                          ? 'Moved to Archive'
+                          : 'Moved to Trash';
+
+                      return (
+                        <div
+                          key={entry.id}
+                          className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="text-sm font-semibold text-slate-900">
+                              {actionLabel}
+                            </div>
+                            <div className="text-xs text-slate-500">
+                              {new Date(entry.timestamp).toLocaleString()}
+                            </div>
+                          </div>
+
+                          <div className="mt-2 text-sm text-slate-700">{filename}</div>
+
+                          <div className="mt-2 text-xs text-slate-500 break-all">
+                            Source: {entry.source_path}
+                          </div>
+
+                          {entry.destination_path ? (
+                            <div className="mt-1 text-xs text-slate-500 break-all">
+                              Destination: {entry.destination_path}
+                            </div>
+                          ) : null}
+
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
+                              {entry.mode}
+                            </span>
+                            <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
+                              {entry.status}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </SectionCard>
 
               <section className="grid grid-cols-1 gap-6 xl:grid-cols-3">
                 <SectionCard

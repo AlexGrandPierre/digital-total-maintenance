@@ -4,9 +4,10 @@ import json
 import shutil
 from pathlib import Path
 from datetime import datetime, timezone
+from action_history import append_action_history
 
 
-def move_to_review(file_path: str) -> dict:
+def move_to_review(file_path: str, mode: str = "single") -> dict:
     source = Path(file_path).expanduser().resolve()
     review_dir = Path.home() / "Desktop" / "DTM Review"
 
@@ -30,7 +31,6 @@ def move_to_review(file_path: str) -> dict:
 
     destination = review_dir / source.name
 
-    # Avoid overwriting existing files
     if destination.exists():
         stem = destination.stem
         suffix = destination.suffix
@@ -45,13 +45,24 @@ def move_to_review(file_path: str) -> dict:
 
     shutil.move(str(source), str(destination))
 
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    history_entry = append_action_history(
+        action="move_to_review",
+        source_path=str(source),
+        destination_path=str(destination),
+        mode=mode,
+        status="success",
+    )
+
     return {
         "success": True,
         "action": "move_to_review",
         "path": str(source),
         "destination": str(destination),
         "message": "File moved to DTM Review.",
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "timestamp": timestamp,
+        "history_entry": history_entry,
     }
 
 
@@ -64,5 +75,8 @@ if __name__ == "__main__":
         }))
         sys.exit(1)
 
-    result = move_to_review(sys.argv[1])
+    file_path = sys.argv[1]
+    mode = sys.argv[2] if len(sys.argv) > 2 else "single"
+
+    result = move_to_review(file_path, mode=mode)
     print(json.dumps(result))

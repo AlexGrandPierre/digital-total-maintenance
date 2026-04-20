@@ -50,6 +50,36 @@ function runPythonScript(scriptPath, args = []) {
   });
 }
 
+function readActionHistory(limit = 20) {
+  return new Promise((resolve) => {
+    const historyScriptPath = path.join(__dirname, '..', 'modules', 'action_history.py');
+    const py = spawn('python3', [historyScriptPath, String(limit)]);
+
+    let output = '';
+    let errorOutput = '';
+
+    py.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    py.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
+    py.on('close', () => {
+      try {
+        resolve(JSON.parse(output || '[]'));
+      } catch {
+        resolve([]);
+      }
+    });
+
+    py.on('error', () => {
+      resolve([]);
+    });
+  });
+}
+
 app.whenReady().then(() => {
   createWindow();
 
@@ -163,6 +193,7 @@ app.whenReady().then(() => {
   ipcMain.handle('move-to-review', async (_event, payload = {}) => {
     const reviewActionPath = path.join(__dirname, '..', 'modules', 'review_action.py');
     const filePath = payload.filePath;
+    const mode = payload.mode || 'single';
 
     if (!filePath) {
       return {
@@ -171,7 +202,7 @@ app.whenReady().then(() => {
       };
     }
 
-    const result = await runPythonScript(reviewActionPath, [filePath]);
+    const result = await runPythonScript(reviewActionPath, [filePath, mode]);
 
     try {
       return JSON.parse(result.output || '{}');
@@ -186,6 +217,7 @@ app.whenReady().then(() => {
   ipcMain.handle('move-to-archive', async (_event, payload = {}) => {
     const archiveActionPath = path.join(__dirname, '..', 'modules', 'archive_action.py');
     const filePath = payload.filePath;
+    const mode = payload.mode || 'single';
 
     if (!filePath) {
       return {
@@ -194,7 +226,7 @@ app.whenReady().then(() => {
       };
     }
 
-    const result = await runPythonScript(archiveActionPath, [filePath]);
+    const result = await runPythonScript(archiveActionPath, [filePath, mode]);
 
     try {
       return JSON.parse(result.output || '{}');
@@ -209,6 +241,7 @@ app.whenReady().then(() => {
   ipcMain.handle('move-to-trash', async (_event, payload = {}) => {
     const trashActionPath = path.join(__dirname, '..', 'modules', 'trash_action.py');
     const filePath = payload.filePath;
+    const mode = payload.mode || 'single';
 
     if (!filePath) {
       return {
@@ -217,7 +250,7 @@ app.whenReady().then(() => {
       };
     }
 
-    const result = await runPythonScript(trashActionPath, [filePath]);
+    const result = await runPythonScript(trashActionPath, [filePath, mode]);
 
     try {
       return JSON.parse(result.output || '{}');
@@ -226,6 +259,19 @@ app.whenReady().then(() => {
         success: false,
         message: result.errorOutput || result.output || 'Failed to parse trash action result.',
       };
+    }
+  });
+
+  ipcMain.handle('get-action-history', async (_event, payload = {}) => {
+    const limit = Number(payload.limit || 20);
+    const historyPath = path.join(__dirname, '..', 'modules', 'action_history.py');
+
+    const result = await runPythonScript(historyPath, [String(limit), 'read']);
+
+    try {
+      return JSON.parse(result.output || '[]');
+    } catch {
+      return [];
     }
   });
 
