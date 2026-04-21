@@ -7,6 +7,22 @@ type ScanRequestPayload = {
   customPath?: string;
 };
 
+type ActionHistoryEntry = {
+  id: string;
+  timestamp: string;
+  action:
+    | 'move_to_review'
+    | 'move_to_archive'
+    | 'move_to_trash'
+    | 'restore_from_review'
+    | 'restore_from_archive';
+  source_path: string;
+  destination_path: string | null;
+  status: 'success';
+  mode: 'single' | 'bulk';
+  reverts_history_id?: string | null;
+};
+
 type ActionResult = {
   success: boolean;
   message: string;
@@ -35,16 +51,6 @@ type ScanProgress = {
   excluded_dirs_count?: number;
 };
 
-type ActionHistoryEntry = {
-  id: string;
-  timestamp: string;
-  action: 'move_to_review' | 'move_to_archive' | 'move_to_trash';
-  source_path: string;
-  destination_path: string | null;
-  status: 'success';
-  mode: 'single' | 'bulk';
-};
-
 interface ElectronAPI {
   sendScanRequest?: (payload: ScanRequestPayload) => void;
   onScanFinished?: (callback: (data: { output?: string }) => void) => () => void;
@@ -54,6 +60,7 @@ interface ElectronAPI {
   moveToTrash?: (filePath: string, mode?: 'single' | 'bulk') => Promise<ActionResult>;
   browseForFolder?: () => Promise<BrowseResult>;
   getActionHistory?: (limit?: number) => Promise<ActionHistoryEntry[]>;
+  restoreFromHistory?: (entry: ActionHistoryEntry) => Promise<ActionResult>;
 }
 
 interface Window {

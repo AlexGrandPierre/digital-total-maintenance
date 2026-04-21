@@ -3,8 +3,9 @@ import sys
 import uuid
 from pathlib import Path
 from datetime import datetime, timezone
+from typing import Optional
 
-APP_HISTORY_DIR = Path.home() / "Desktop" / "digital-total-maintenance" / "data"
+APP_HISTORY_DIR = Path.home() / "Desktop" / "data"
 APP_HISTORY_FILE = APP_HISTORY_DIR / "action-history.json"
 MAX_HISTORY_ITEMS = 1000
 
@@ -36,9 +37,10 @@ def append_action_history(
     *,
     action: str,
     source_path: str,
-    destination_path: str | None,
+    destination_path: Optional[str],
     mode: str = "single",
     status: str = "success",
+    reverts_history_id: Optional[str] = None,
 ) -> dict:
     timestamp = datetime.now(timezone.utc).isoformat()
 
@@ -50,6 +52,7 @@ def append_action_history(
         "destination_path": destination_path,
         "status": status,
         "mode": mode,
+        "reverts_history_id": reverts_history_id,
     }
 
     history = _read_history()
@@ -59,7 +62,7 @@ def append_action_history(
     return entry
 
 
-def get_action_history(limit: int | None = None) -> list:
+def get_action_history(limit=None) -> list:
     history = _read_history()
 
     if limit is None:

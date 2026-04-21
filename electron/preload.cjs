@@ -26,4 +26,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   browseForFolder: () => ipcRenderer.invoke('browse-for-folder'),
   getActionHistory: (limit = 20) => ipcRenderer.invoke('get-action-history', { limit }),
+  restoreFromHistory: (entry) => ipcRenderer.invoke('restore-from-history', { entry }),
 });

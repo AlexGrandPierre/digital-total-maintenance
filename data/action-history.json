@@ -1,5 +1,104 @@
 [
   {
+    "id": "2026-04-20T12:47:32.927598+00:00__move_to_review__73a250c9",
+    "timestamp": "2026-04-20T12:47:32.927598+00:00",
+    "action": "move_to_review",
+    "source_path": "/Users/alexandregrandpierre/Desktop/dtm-test-folder/org.eclipse.mylyn.java.ui.prefs",
+    "destination_path": "/Users/alexandregrandpierre/Desktop/DTM Review/org.eclipse.mylyn.java.ui.prefs",
+    "status": "success",
+    "mode": "single"
+  },
+  {
+    "id": "2026-04-20T12:37:53.260452+00:00__restore_from_archive__2c30c0e3",
+    "timestamp": "2026-04-20T12:37:53.260452+00:00",
+    "action": "restore_from_archive",
+    "source_path": "/Users/alexandregrandpierre/Desktop/DTM Archive/1648136636074.profile.gz",
+    "destination_path": "/Users/alexandregrandpierre/Desktop/dtm-test-folder/1648136636074.profile.gz",
+    "status": "success",
+    "mode": "single"
+  },
+  {
+    "id": "2026-04-20T12:33:52.145993+00:00__move_to_archive__fdeeeacf",
+    "timestamp": "2026-04-20T12:33:52.145993+00:00",
+    "action": "move_to_archive",
+    "source_path": "/Users/alexandregrandpierre/Desktop/dtm-test-folder/1648136636074.profile.gz",
+    "destination_path": "/Users/alexandregrandpierre/Desktop/DTM Archive/1648136636074.profile.gz",
+    "status": "success",
+    "mode": "single"
+  },
+  {
+    "id": "2026-04-20T12:33:01.878544+00:00__move_to_trash__ce88a0d7",
+    "timestamp": "2026-04-20T12:33:01.878544+00:00",
+    "action": "move_to_trash",
+    "source_path": "/Users/alexandregrandpierre/Desktop/dtm-test-folder/tasks.log",
+    "destination_path": "/Users/alexandregrandpierre/.Trash/tasks.log",
+    "status": "success",
+    "mode": "bulk"
+  },
+  {
+    "id": "2026-04-20T12:33:01.804535+00:00__move_to_trash__bd8e20f0",
+    "timestamp": "2026-04-20T12:33:01.804535+00:00",
+    "action": "move_to_trash",
+    "source_path": "/Users/alexandregrandpierre/Desktop/dtm-test-folder/editSessions.log",
+    "destination_path": "/Users/alexandregrandpierre/.Trash/editSessions.log",
+    "status": "success",
+    "mode": "bulk"
+  },
+  {
+    "id": "2026-04-20T12:33:01.746083+00:00__move_to_trash__73f7c1c4",
+    "timestamp": "2026-04-20T12:33:01.746083+00:00",
+    "action": "move_to_trash",
+    "source_path": "/Users/alexandregrandpierre/Desktop/dtm-test-folder/~notes.old",
+    "destination_path": "/Users/alexandregrandpierre/.Trash/~notes.old",
+    "status": "success",
+    "mode": "bulk"
+  },
+  {
+    "id": "2026-04-20T12:33:01.684116+00:00__move_to_trash__73b69513",
+    "timestamp": "2026-04-20T12:33:01.684116+00:00",
+    "action": "move_to_trash",
+    "source_path": "/Users/alexandregrandpierre/Desktop/dtm-test-folder/~temp-file.tmp",
+    "destination_path": "/Users/alexandregrandpierre/.Trash/~temp-file.tmp",
+    "status": "success",
+    "mode": "bulk"
+  },
+  {
+    "id": "2026-04-20T12:32:51.461411+00:00__move_to_trash__69f15bcd",
+    "timestamp": "2026-04-20T12:32:51.461411+00:00",
+    "action": "move_to_trash",
+    "source_path": "/Users/alexandregrandpierre/Desktop/dtm-test-folder/~old-debug.log",
+    "destination_path": "/Users/alexandregrandpierre/.Trash/~old-debug.log",
+    "status": "success",
+    "mode": "bulk"
+  },
+  {
+    "id": "2026-04-20T12:32:51.395836+00:00__move_to_trash__115e6061",
+    "timestamp": "2026-04-20T12:32:51.395836+00:00",
+    "action": "move_to_trash",
+    "source_path": "/Users/alexandregrandpierre/Desktop/dtm-test-folder/sharedassets_update.log",
+    "destination_path": "/Users/alexandregrandpierre/.Trash/sharedassets_update.log",
+    "status": "success",
+    "mode": "bulk"
+  },
+  {
+    "id": "2026-04-20T12:32:51.332484+00:00__move_to_trash__848cacb9",
+    "timestamp": "2026-04-20T12:32:51.332484+00:00",
+    "action": "move_to_trash",
+    "source_path": "/Users/alexandregrandpierre/Desktop/dtm-test-folder/IsleRoyaleWB_2.17.1_update.log",
+    "destination_path": "/Users/alexandregrandpierre/.Trash/IsleRoyaleWB_2.17.1_update.log",
+    "status": "success",
+    "mode": "bulk"
+  },
+  {
+    "id": "2026-04-20T12:32:51.266749+00:00__move_to_trash__3d72a5e3",
+    "timestamp": "2026-04-20T12:32:51.266749+00:00",
+    "action": "move_to_trash",
+    "source_path": "/Users/alexandregrandpierre/Desktop/dtm-test-folder/ExperimentalDesign_1.8.0_update.log",
+    "destination_path": "/Users/alexandregrandpierre/.Trash/ExperimentalDesign_1.8.0_update.log",
+    "status": "success",
+    "mode": "bulk"
+  },
+  {
     "id": "2026-04-20T12:10:08.414366+00:00__move_to_archive__d677ab9e",
     "timestamp": "2026-04-20T12:10:08.414366+00:00",
     "action": "move_to_archive",

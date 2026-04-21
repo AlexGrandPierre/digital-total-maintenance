@@ -302,6 +302,10 @@ function App() {
 
   const [actionHistory, setActionHistory] = useState<ActionHistoryEntry[]>([]);
 
+  const [busyHistoryId, setBusyHistoryId] = useState<string | null>(null);
+
+  const [historyFilter, setHistoryFilter] = useState<'undoable' | 'all' | 'restored'>('undoable');
+
   useEffect(() => {
     const unsubscribeFinished = window.electronAPI?.onScanFinished?.((data: { output?: string }) => {
       const output = data.output || 'Scan completed with no output.';
@@ -394,12 +398,51 @@ function App() {
 
   const loadActionHistory = async () => {
     try {
-      const history = await window.electronAPI?.getActionHistory?.(12);
+      const history = await window.electronAPI?.getActionHistory?.(100);
       setActionHistory(history || []);
     } catch {
       setActionHistory([]);
     }
   };
+
+  const canUndoHistoryEntry = (entry: ActionHistoryEntry) => {
+    if (
+      entry.status !== 'success' ||
+      (entry.action !== 'move_to_review' && entry.action !== 'move_to_archive') ||
+      !entry.source_path ||
+      !entry.destination_path
+    ) {
+      return false;
+    }
+
+    const alreadyRestored = actionHistory.some((historyEntry) => {
+      return (
+        (historyEntry.action === 'restore_from_review' ||
+          historyEntry.action === 'restore_from_archive') &&
+        historyEntry.status === 'success' &&
+        historyEntry.reverts_history_id === entry.id
+      );
+    });
+
+    return !alreadyRestored;
+  };
+
+  const filteredActionHistory = useMemo(() => {
+    if (historyFilter === 'undoable') {
+      return actionHistory.filter((entry) => canUndoHistoryEntry(entry));
+    }
+
+    if (historyFilter === 'restored') {
+      return actionHistory.filter(
+        (entry) =>
+          entry.action === 'restore_from_review' ||
+          entry.action === 'restore_from_archive'
+      );
+    }
+
+    return actionHistory;
+  }, [actionHistory, historyFilter]);
+
 
   const visibleDuplicates = useMemo(() => {
     if (!scanData) return [];
@@ -603,6 +646,49 @@ function App() {
       });
     } finally {
       setBusyPath(null);
+    }
+  };
+
+  const handleUndoHistoryEntry = async (entry: ActionHistoryEntry) => {
+    if (!canUndoHistoryEntry(entry)) {
+      return;
+    }
+
+    setBusyHistoryId(entry.id);
+    setActionStatus(null);
+
+    try {
+      const result = await window.electronAPI?.restoreFromHistory?.(entry);
+
+      if (result?.success) {
+        setActionStatus({
+          tone: 'success',
+          message: result.destination
+            ? `Restored file: ${result.destination}`
+            : result.message,
+        });
+
+        await loadActionHistory();
+        triggerRescan();
+      } else {
+        console.error('Restore result:', result);
+
+        setActionStatus({
+          tone: 'error',
+          message: result?.message
+            ? `Restore failed: ${result.message}`
+            : 'Restore failed with no detailed message.',
+        });
+      }
+    } catch (error) {
+      console.error('Undo exception:', error);
+
+      setActionStatus({
+        tone: 'error',
+        message: error instanceof Error ? `Undo exception: ${error.message}` : 'Unexpected undo failure.',
+      });
+    } finally {
+      setBusyHistoryId(null);
     }
   };
 
@@ -1176,19 +1262,73 @@ function App() {
                 title="Recent Actions"
                 subtitle="A local record of successful maintenance actions performed by DTM."
               >
-                {actionHistory.length === 0 ? (
-                  <p className="text-sm text-slate-500">No actions have been logged yet.</p>
+                <div className="mb-4 flex flex-wrap gap-3">
+                  <button
+                    onClick={() => setHistoryFilter('undoable')}
+                    className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                      historyFilter === 'undoable'
+                        ? 'bg-slate-900 text-white shadow-sm'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    Undo Available
+                  </button>
+
+                  <button
+                    onClick={() => setHistoryFilter('all')}
+                    className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                      historyFilter === 'all'
+                        ? 'bg-slate-900 text-white shadow-sm'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    All Actions
+                  </button>
+
+                  <button
+                    onClick={() => setHistoryFilter('restored')}
+                    className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                      historyFilter === 'restored'
+                        ? 'bg-slate-900 text-white shadow-sm'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    Restored
+                  </button>
+                </div>
+
+                <div className="mb-3 text-xs text-slate-500">
+                  Showing {filteredActionHistory.length} item{filteredActionHistory.length === 1 ? '' : 's'}
+                  {historyFilter === 'undoable'
+                    ? ' with undo available'
+                    : historyFilter === 'restored'
+                    ? ' that have already been restored'
+                    : ' from action history'}
+                </div>
+
+                {filteredActionHistory.length === 0 ? (
+                  <p className="text-sm text-slate-500">
+                    {historyFilter === 'undoable'
+                      ? 'No undoable actions are currently available.'
+                      : historyFilter === 'restored'
+                      ? 'No restored actions have been logged yet.'
+                      : 'No actions have been logged yet.'}
+                  </p>
                 ) : (
                   <div className="space-y-3">
-                    {actionHistory.map((entry) => {
+                    {filteredActionHistory.map((entry) => {
                       const filename = entry.source_path.split('/').pop() || entry.source_path;
 
                       const actionLabel =
-                        entry.action === 'move_to_review'
-                          ? 'Moved to Review'
-                          : entry.action === 'move_to_archive'
-                          ? 'Moved to Archive'
-                          : 'Moved to Trash';
+                      entry.action === 'move_to_review'
+                        ? 'Moved to Review'
+                        : entry.action === 'move_to_archive'
+                        ? 'Moved to Archive'
+                        : entry.action === 'move_to_trash'
+                        ? 'Moved to Trash'
+                        : entry.action === 'restore_from_review'
+                        ? 'Restored from Review'
+                        : 'Restored from Archive';
 
                       return (
                         <div
@@ -1224,6 +1364,25 @@ function App() {
                               {entry.status}
                             </span>
                           </div>
+
+                          {canUndoHistoryEntry(entry) ? (
+                            <div className="mt-4">
+                              <button
+                                onClick={() => handleUndoHistoryEntry(entry)}
+                                disabled={busyHistoryId === entry.id || isBulkActing || isScanning}
+                                className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                              >
+                                {busyHistoryId === entry.id ? 'Restoring…' : 'Undo'}
+                              </button>
+                            </div>
+                          ) : null}
+
+                          {!canUndoHistoryEntry(entry) &&
+                          (entry.action === 'move_to_review' || entry.action === 'move_to_archive') ? (
+                            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-500 ring-1 ring-slate-200">
+                              already restored
+                            </span>
+                          ) : null}
                         </div>
                       );
                     })}

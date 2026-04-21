@@ -275,6 +275,29 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('restore-from-history', async (_event, payload = {}) => {
+    const restoreActionPath = path.join(__dirname, '..', 'modules', 'restore_action.py');
+    const entry = payload.entry;
+
+    if (!entry) {
+      return {
+        success: false,
+        message: 'No history entry provided.',
+      };
+    }
+
+    const result = await runPythonScript(restoreActionPath, [JSON.stringify(entry)]);
+
+    try {
+      return JSON.parse(result.output || '{}');
+    } catch {
+      return {
+        success: false,
+        message: result.errorOutput || result.output || 'Failed to parse restore action result.',
+      };
+    }
+  });
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
