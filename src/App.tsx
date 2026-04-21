@@ -21,6 +21,27 @@ type ClassifiedFile = {
   ui_visibility: 'normal' | 'hidden_by_default';
 };
 
+type DuplicateGroupItem = {
+  path: string;
+  name: string;
+  ext: string;
+  size: number;
+  age_days: number;
+  category: string;
+  confidence: 'high' | 'medium' | 'low';
+  recommended_action: 'keep' | 'ignore' | 'review' | 'archive' | 'remove';
+  reason: string;
+  ui_visibility: 'normal' | 'hidden_by_default';
+};
+
+type DuplicateGroup = {
+  group_id: string;
+  confidence: 'high' | 'medium';
+  reason: string;
+  normalized_name: string;
+  items: DuplicateGroupItem[];
+};
+
 type ScanResult = {
   scanned_at: string;
   folder: string;
@@ -40,7 +61,7 @@ type ScanResult = {
   remove_candidates: ClassifiedFile[];
   remove_total: number;
 
-  duplicates: string[][];
+  duplicates: DuplicateGroup[];
   duplicates_total: number;
 
   age_buckets: Record<string, number>;
@@ -532,13 +553,18 @@ function App() {
   const removeDuplicateFromQueue = (duplicatePath: string) => {
     setScanData((prev) => {
       if (!prev) return prev;
-  
+
+      const updatedGroups = prev.duplicates
+        .map((group) => ({
+          ...group,
+          items: group.items.filter((item) => item.path !== duplicatePath),
+        }))
+        .filter((group) => group.items.length >= 2);
+
       return {
         ...prev,
-        duplicates: prev.duplicates.filter(
-          (pair) => pair[0] !== duplicatePath && pair[1] !== duplicatePath
-        ),
-        duplicates_total: Math.max(0, prev.duplicates_total - 1),
+        duplicates: updatedGroups,
+        duplicates_total: updatedGroups.length,
       };
     });
   };
@@ -737,7 +763,7 @@ function App() {
       ['Needs review', scanData.review_total],
       ['Archive candidates', scanData.archive_total],
       ['Remove candidates', scanData.remove_total],
-      ['Duplicate pairs', scanData.duplicates_total],
+      ['Duplicate groups', scanData.duplicates_total],
       ['Excluded directories', scanData.excluded_dirs_count],
       ['Folder scanned', scanData.folder],
       ['Mode', scanData.mode],
@@ -1569,58 +1595,99 @@ function App() {
                 >
                   {visibleDuplicates.length > 0 ? (
                     <div className="mb-3 text-xs text-slate-500">
-                      Showing {visibleDuplicates.length} of {scanData.duplicates_total} duplicate pairs
+                      Showing {visibleDuplicates.length} of {scanData.duplicates_total} duplicate groups
                     </div>
                   ) : null}
 
                   {scanData.duplicates.length === 0 ? (
                     <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
-                      No duplicate pairs detected in this scan.
+                      No duplicate groups detected in this scan.
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      {visibleDuplicates.map((pair, index) => (
+                      {visibleDuplicates.map((group, index) => (
                         <div
-                          key={`${pair[0]}-${pair[1]}-${index}`}
+                          key={`${group.group_id}-${index}`}
                           className="rounded-3xl border border-slate-200 bg-slate-50 p-4"
                         >
-                          <div className="flex items-center justify-between">
-                            <div className="text-sm font-semibold text-slate-900">
-                              Duplicate Pair {index + 1}
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <div className="text-sm font-semibold text-slate-900">
+                                Duplicate Group {index + 1}
+                              </div>
+                              <div className="mt-1 text-xs text-slate-500">
+                                {group.items.length} files · confidence: {group.confidence}
+                              </div>
                             </div>
+
                             <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
-                              Compare
+                              Grouped
                             </span>
                           </div>
 
-                          <div className="mt-4 space-y-3">
-                            <div className="rounded-2xl bg-white p-3">
-                              <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400">
-                                Original
-                              </div>
-                              <div className="mt-2 break-all text-sm text-slate-700">{pair[0]}</div>
+                          <div className="mt-3 rounded-2xl bg-white p-3">
+                            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400">
+                              Reason
                             </div>
-
-                            <div className="rounded-2xl bg-white p-3">
-                              <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400">
-                                Duplicate
-                              </div>
-                              <div className="mt-2 break-all text-sm text-slate-700">{pair[1]}</div>
-                            </div>
+                            <div className="mt-2 text-sm text-slate-700">{group.reason}</div>
                           </div>
 
-                          <div className="mt-4 flex flex-wrap gap-3">
-                            <button
-                              onClick={() => handleArchiveDuplicate(pair[1])}
-                              disabled={busyPath === pair[1] || isBulkActing}
-                              className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
-                                busyPath === pair[1]
-                                  ? 'cursor-not-allowed bg-slate-200 text-slate-500'
-                                  : 'bg-sky-900 text-white hover:bg-sky-700'
-                              }`}
-                            >
-                              {busyPath === pair[1] ? 'Archiving…' : 'Archive Duplicate'}
-                            </button>
+                          <div className="mt-4 space-y-3">
+                            {group.items.map((item, itemIndex) => {
+                              const likelyPrimary =
+                                itemIndex === 0 &&
+                                !item.name.toLowerCase().includes('copy') &&
+                                !item.name.match(/\(\d+\)/);
+
+                              return (
+                                <div
+                                  key={item.path}
+                                  className="rounded-2xl bg-white p-3"
+                                >
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <div className="text-sm font-semibold text-slate-900">
+                                      {item.name}
+                                    </div>
+
+                                    {likelyPrimary ? (
+                                      <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-200">
+                                        Likely primary
+                                      </span>
+                                    ) : (
+                                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
+                                        Likely copy
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div className="mt-2 break-all text-xs text-slate-600">
+                                    {item.path}
+                                  </div>
+
+                                  <div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-500">
+                                    <span>Size: {item.size.toLocaleString()} bytes</span>
+                                    <span>Age: {item.age_days} days</span>
+                                    <span>Type: {item.ext}</span>
+                                  </div>
+
+                                  {!likelyPrimary ? (
+                                    <div className="mt-4 flex flex-wrap gap-3">
+                                      <button
+                                        onClick={() => handleArchiveDuplicate(item.path)}
+                                        disabled={busyPath === item.path || isBulkActing}
+                                        className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
+                                          busyPath === item.path
+                                            ? 'cursor-not-allowed bg-slate-200 text-slate-500'
+                                            : 'bg-sky-900 text-white hover:bg-sky-700'
+                                        }`}
+                                      >
+                                        {busyPath === item.path ? 'Archiving…' : 'Archive This Copy'}
+                                      </button>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
                       ))}

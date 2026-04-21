@@ -2,6 +2,7 @@ import os
 import json
 import sys
 import time
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -209,6 +210,73 @@ def maybe_append(bucket: list, item, cap: int) -> None:
     if len(bucket) < cap:
         bucket.append(item)
 
+COPY_MARKER_PATTERN = re.compile(
+    r"(\s*\(\d+\)$)|(\s*copy(?:\s+\d+)?$)|(\s*-\s*copy(?:\s+\d+)?$)|(\s*_copy(?:_\d+)?$)",
+    re.IGNORECASE
+)
+
+
+def normalize_duplicate_name(filename: str) -> str:
+    stem, ext = os.path.splitext(filename)
+    normalized_stem = stem.strip()
+
+    while True:
+        cleaned = COPY_MARKER_PATTERN.sub("", normalized_stem).strip()
+        if cleaned == normalized_stem:
+            break
+        normalized_stem = cleaned
+
+    normalized_stem = re.sub(r"\s+", " ", normalized_stem).strip().lower()
+    return f"{normalized_stem}{ext.lower()}"
+
+
+def get_duplicate_group_confidence(group_items: list) -> str:
+    if len(group_items) >= 3:
+        return "high"
+    return "medium"
+
+
+def get_duplicate_group_reason(normalized_name: str, ext: str, size: int, count: int) -> str:
+    ext_label = ext if ext and ext != "no_ext" else "no extension"
+    return (
+        f"{count} files share a normalized name pattern ({normalized_name}), "
+        f"extension ({ext_label}), and file size ({size} bytes)."
+    )
+
+
+def build_duplicate_groups(duplicate_candidates: dict, cap: int) -> tuple[list, int]:
+    groups = []
+
+    for key, items in duplicate_candidates.items():
+        if len(items) < 2:
+            continue
+
+        normalized_name, ext, size = key
+
+        sorted_items = sorted(
+            items,
+            key=lambda item: (
+                "(1)" in item["name"].lower()
+                or "copy" in item["name"].lower(),
+                item["age_days"],
+                item["path"].lower(),
+            )
+        )
+
+        group = {
+            "group_id": f"dup_{len(groups) + 1}",
+            "confidence": get_duplicate_group_confidence(sorted_items),
+            "reason": get_duplicate_group_reason(normalized_name, ext, size, len(sorted_items)),
+            "normalized_name": normalized_name,
+            "items": sorted_items,
+        }
+
+        if len(groups) < cap:
+            groups.append(group)
+
+    total = sum(1 for items in duplicate_candidates.values() if len(items) >= 2)
+    return groups, total
+
 
 def scan_folder(target_dir: str) -> dict:
     target_dir = normalize_target(target_dir)
@@ -217,8 +285,7 @@ def scan_folder(target_dir: str) -> dict:
 
     files_scanned = 0
     by_ext = {}
-    duplicates_seen = {}
-    duplicate_items = []
+    duplicate_candidates = {}
 
     review_files = []
     system_files = []
@@ -333,12 +400,21 @@ def scan_folder(target_dir: str) -> dict:
                     system_total += 1
                     maybe_append(system_files, entry, MAX_SYSTEM_ITEMS)
 
-                sig = (filename.lower(), size)
-                if sig in duplicates_seen:
-                    duplicates_total += 1
-                    maybe_append(duplicate_items, [duplicates_seen[sig], full_path], MAX_DUPLICATES)
-                else:
-                    duplicates_seen[sig] = full_path
+                normalized_duplicate_name = normalize_duplicate_name(filename)
+                duplicate_sig = (normalized_duplicate_name, ext, size)
+
+                duplicate_candidates.setdefault(duplicate_sig, []).append({
+                    "name": filename,
+                    "path": full_path,
+                    "size": size,
+                    "age_days": age_days,
+                    "ext": ext,
+                    "category": classification["category"],
+                    "confidence": classification["confidence"],
+                    "recommended_action": classification["recommended_action"],
+                    "reason": classification["reason"],
+                    "ui_visibility": classification["ui_visibility"],
+                })
 
             except Exception as e:
                 maybe_append(
@@ -352,6 +428,11 @@ def scan_folder(target_dir: str) -> dict:
                 )
 
     sorted_ext = dict(sorted(by_ext.items(), key=lambda item: item[1], reverse=True))
+
+    duplicate_groups, duplicates_total = build_duplicate_groups(
+        duplicate_candidates,
+        MAX_DUPLICATES
+    )
 
     result = {
         "scanned_at": datetime.now(timezone.utc).isoformat(),
@@ -367,7 +448,7 @@ def scan_folder(target_dir: str) -> dict:
         "archive_total": archive_total,
         "remove_candidates": remove_candidates,
         "remove_total": remove_total,
-        "duplicates": duplicate_items,
+        "duplicates": duplicate_groups,
         "duplicates_total": duplicates_total,
         "age_buckets": age_buckets,
         "by_ext": sorted_ext,
