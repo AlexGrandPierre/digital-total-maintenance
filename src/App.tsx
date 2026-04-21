@@ -329,6 +329,9 @@ function App() {
 
   const [needsRescan, setNeedsRescan] = useState(false);
 
+  const [duplicatePrimarySelections, setDuplicatePrimarySelections] = useState<Record<string, string>>({});
+  const [busyDuplicateGroupId, setBusyDuplicateGroupId] = useState<string | null>(null);
+
   useEffect(() => {
     const unsubscribeFinished = window.electronAPI?.onScanFinished?.((data: { output?: string }) => {
       const output = data.output || 'Scan completed with no output.';
@@ -371,6 +374,26 @@ function App() {
       unsubscribeProgress?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (!scanData) {
+      setDuplicatePrimarySelections({});
+      return;
+    }
+
+    setDuplicatePrimarySelections((prev) => {
+      const next: Record<string, string> = {};
+
+      for (const group of scanData.duplicates) {
+        const existingSelection = prev[group.group_id];
+        if (existingSelection && group.items.some((item) => item.path === existingSelection)) {
+          next[group.group_id] = existingSelection;
+        }
+      }
+
+      return next;
+    });
+  }, [scanData]);
 
   const scanTargetLabel = useMemo(() => {
     switch (scanPreset) {
@@ -577,6 +600,56 @@ function App() {
     });
   };
 
+  const isLikelyPrimaryDuplicateItem = (item: DuplicateGroupItem, itemIndex: number) => {
+    return (
+      itemIndex === 0 &&
+      !item.name.toLowerCase().includes('copy') &&
+      !item.name.match(/\(\d+\)/)
+    );
+  };
+
+  const getSelectedDuplicatePrimaryPath = (group: DuplicateGroup) => {
+    const manualSelection = duplicatePrimarySelections[group.group_id];
+
+    if (manualSelection && group.items.some((item) => item.path === manualSelection)) {
+      return manualSelection;
+    }
+
+    const likelyPrimary = group.items.find((item, index) =>
+      isLikelyPrimaryDuplicateItem(item, index)
+    );
+
+    return likelyPrimary?.path || group.items[0]?.path || '';
+  };
+
+  const setDuplicatePrimarySelection = (groupId: string, filePath: string) => {
+    setDuplicatePrimarySelections((prev) => ({
+      ...prev,
+      [groupId]: filePath,
+    }));
+  };
+
+  const removeDuplicateItemsFromQueue = (duplicatePaths: string[]) => {
+    setScanData((prev) => {
+      if (!prev) return prev;
+
+      const duplicatePathSet = new Set(duplicatePaths);
+
+      const updatedGroups = prev.duplicates
+        .map((group) => ({
+          ...group,
+          items: group.items.filter((item) => !duplicatePathSet.has(item.path)),
+        }))
+        .filter((group) => group.items.length >= 2);
+
+      return {
+        ...prev,
+        duplicates: updatedGroups,
+        duplicates_total: updatedGroups.length,
+      };
+    });
+  };
+
   const handleMoveToReview = async (filePath: string) => {
     if (isBulkActing) return;
 
@@ -647,6 +720,8 @@ function App() {
   };
 
   const handleArchiveDuplicate = async (duplicatePath: string) => {
+    if (busyDuplicateGroupId) return;
+    
     setBusyPath(duplicatePath);
     setActionStatus(null);
   
@@ -683,6 +758,64 @@ function App() {
     } finally {
       setBusyPath(null);
     }
+  };
+
+  const handleArchiveDuplicateGroup = async (group: DuplicateGroup) => {
+    if (isBulkActing || isScanning || busyDuplicateGroupId) {
+      return;
+    }
+
+    const keepPath = getSelectedDuplicatePrimaryPath(group);
+    const itemsToArchive = group.items.filter((item) => item.path !== keepPath);
+
+    if (!keepPath || itemsToArchive.length === 0) {
+      return;
+    }
+
+    setBusyDuplicateGroupId(group.group_id);
+    setActionStatus(null);
+
+    let successCount = 0;
+    let failureCount = 0;
+    const archivedPaths: string[] = [];
+
+    for (const item of itemsToArchive) {
+      try {
+        const result = await performQueueAction('archive', item.path, {
+          rescanAfterSuccess: false,
+          mode: 'bulk',
+        });
+
+        if (result.success) {
+          successCount += 1;
+          archivedPaths.push(item.path);
+        } else {
+          failureCount += 1;
+        }
+      } catch {
+        failureCount += 1;
+      }
+    }
+
+    if (archivedPaths.length > 0) {
+      removeDuplicateItemsFromQueue(archivedPaths);
+      await loadActionHistory();
+      setNeedsRescan(true);
+    }
+
+    if (failureCount === 0) {
+      setActionStatus({
+        tone: 'success',
+        message: `Archived ${successCount} duplicate copie${successCount === 1 ? 'y' : 's'} while keeping the selected primary file.`,
+      });
+    } else {
+      setActionStatus({
+        tone: 'error',
+        message: `Duplicate group resolution finished with partial success: ${successCount} archived, ${failureCount} failed.`,
+      });
+    }
+
+    setBusyDuplicateGroupId(null);
   };
 
   const handleUndoHistoryEntry = async (entry: ActionHistoryEntry) => {
@@ -1605,7 +1738,7 @@ function App() {
 
                 <SectionCard
                   title="Duplicate Review"
-                  subtitle="Potential duplicates found with the current fast heuristic."
+                  subtitle="Grouped file families that appear to contain duplicate copies."
                 >
                   {visibleDuplicates.length > 0 ? (
                     <div className="mb-3 text-xs text-slate-500">
@@ -1619,92 +1752,142 @@ function App() {
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      {visibleDuplicates.map((group, index) => (
-                        <div
-                          key={`${group.group_id}-${index}`}
-                          className="rounded-3xl border border-slate-200 bg-slate-50 p-4"
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div>
-                              <div className="text-sm font-semibold text-slate-900">
-                                Duplicate Group {index + 1}
+                      {visibleDuplicates.map((group, index) => {
+                        const selectedPrimaryPath = getSelectedDuplicatePrimaryPath(group);
+
+                        return (
+                          <div
+                            key={`${group.group_id}-${index}`}
+                            className="rounded-3xl border border-slate-200 bg-slate-50 p-4"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <div className="text-sm font-semibold text-slate-900">
+                                  Duplicate Group {index + 1}
+                                </div>
+                                <div className="mt-1 text-xs text-slate-500">
+                                  {group.items.length} files · confidence: {group.confidence}
+                                </div>
                               </div>
-                              <div className="mt-1 text-xs text-slate-500">
-                                {group.items.length} files · confidence: {group.confidence}
-                              </div>
+
+                              <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
+                                Grouped
+                              </span>
                             </div>
 
-                            <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
-                              Grouped
-                            </span>
-                          </div>
-
-                          <div className="mt-3 rounded-2xl bg-white p-3">
-                            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400">
-                              Reason
+                            <div className="mt-3 rounded-2xl bg-white p-3">
+                              <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400">
+                                Reason
+                              </div>
+                              <div className="mt-2 text-sm text-slate-700">{group.reason}</div>
                             </div>
-                            <div className="mt-2 text-sm text-slate-700">{group.reason}</div>
-                          </div>
 
-                          <div className="mt-4 space-y-3">
-                            {group.items.map((item, itemIndex) => {
-                              const likelyPrimary =
-                                itemIndex === 0 &&
-                                !item.name.toLowerCase().includes('copy') &&
-                                !item.name.match(/\(\d+\)/);
+                            <div className="mt-4 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3">
+                              <div className="flex flex-wrap items-center justify-between gap-3">
+                                <div>
+                                  <div className="text-sm font-semibold text-sky-900">
+                                    Resolution
+                                  </div>
+                                  <div className="mt-1 text-xs text-sky-700">
+                                    Select one file to keep active, then archive the other copies.
+                                  </div>
+                                </div>
 
-                              return (
-                                <div
-                                  key={item.path}
-                                  className="rounded-2xl bg-white p-3"
+                                <button
+                                  onClick={() => handleArchiveDuplicateGroup(group)}
+                                  disabled={
+                                    busyDuplicateGroupId === group.group_id ||
+                                    isBulkActing ||
+                                    isScanning ||
+                                    group.items.length < 2
+                                  }
+                                  className="rounded-full bg-sky-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
                                 >
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <div className="text-sm font-semibold text-slate-900">
-                                      {item.name}
+                                  {busyDuplicateGroupId === group.group_id
+                                    ? 'Resolving…'
+                                    : `Archive other copies (${Math.max(group.items.length - 1, 0)})`}
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="mt-4 space-y-3">
+                              {group.items.map((item, itemIndex) => {
+                                const likelyPrimary = isLikelyPrimaryDuplicateItem(item, itemIndex);
+                                const isSelectedPrimary = item.path === selectedPrimaryPath;
+
+                                return (
+                                  <div
+                                    key={item.path}
+                                    className={`rounded-2xl p-3 ring-1 ${
+                                      isSelectedPrimary
+                                        ? 'bg-emerald-50 ring-emerald-200'
+                                        : 'bg-white ring-slate-200'
+                                    }`}
+                                  >
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <div className="text-sm font-semibold text-slate-900">
+                                        {item.name}
+                                      </div>
+
+                                      {isSelectedPrimary ? (
+                                        <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-medium text-emerald-800 ring-1 ring-emerald-200">
+                                          Selected primary
+                                        </span>
+                                      ) : likelyPrimary ? (
+                                        <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-200">
+                                          Likely primary
+                                        </span>
+                                      ) : (
+                                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
+                                          Likely copy
+                                        </span>
+                                      )}
                                     </div>
 
-                                    {likelyPrimary ? (
-                                      <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-200">
-                                        Likely primary
-                                      </span>
-                                    ) : (
-                                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
-                                        Likely copy
-                                      </span>
-                                    )}
-                                  </div>
+                                    <div className="mt-2 break-all text-xs text-slate-600">
+                                      {item.path}
+                                    </div>
 
-                                  <div className="mt-2 break-all text-xs text-slate-600">
-                                    {item.path}
-                                  </div>
+                                    <div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-500">
+                                      <span>Size: {item.size.toLocaleString()} bytes</span>
+                                      <span>Age: {item.age_days} days</span>
+                                      <span>Type: {item.ext}</span>
+                                    </div>
 
-                                  <div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-500">
-                                    <span>Size: {item.size.toLocaleString()} bytes</span>
-                                    <span>Age: {item.age_days} days</span>
-                                    <span>Type: {item.ext}</span>
-                                  </div>
-
-                                  {!likelyPrimary ? (
                                     <div className="mt-4 flex flex-wrap gap-3">
                                       <button
-                                        onClick={() => handleArchiveDuplicate(item.path)}
-                                        disabled={busyPath === item.path || isBulkActing}
+                                        onClick={() => setDuplicatePrimarySelection(group.group_id, item.path)}
+                                        disabled={busyDuplicateGroupId === group.group_id || isBulkActing || isScanning}
                                         className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
-                                          busyPath === item.path
-                                            ? 'cursor-not-allowed bg-slate-200 text-slate-500'
-                                            : 'bg-sky-900 text-white hover:bg-sky-700'
-                                        }`}
+                                          isSelectedPrimary
+                                            ? 'bg-emerald-700 text-white'
+                                            : 'bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50'
+                                        } disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500`}
                                       >
-                                        {busyPath === item.path ? 'Archiving…' : 'Archive This Copy'}
+                                        {isSelectedPrimary ? 'Keeping this one' : 'Keep this one'}
                                       </button>
+
+                                      {!isSelectedPrimary ? (
+                                        <button
+                                          onClick={() => handleArchiveDuplicate(item.path)}
+                                          disabled={busyPath === item.path || busyDuplicateGroupId === group.group_id || isBulkActing}
+                                          className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
+                                            busyPath === item.path
+                                              ? 'cursor-not-allowed bg-slate-200 text-slate-500'
+                                              : 'bg-sky-900 text-white hover:bg-sky-700'
+                                          }`}
+                                        >
+                                          {busyPath === item.path ? 'Archiving…' : 'Archive This Copy'}
+                                        </button>
+                                      ) : null}
                                     </div>
-                                  ) : null}
-                                </div>
-                              );
-                            })}
+                                  </div>
+                                );
+                              })}
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
 
                       {scanData.duplicates.length > 8 ? (
                         <div className="mt-4 flex gap-3">
