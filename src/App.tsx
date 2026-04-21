@@ -306,6 +306,8 @@ function App() {
 
   const [historyFilter, setHistoryFilter] = useState<'undoable' | 'all' | 'restored'>('undoable');
 
+  const [needsRescan, setNeedsRescan] = useState(false);
+
   useEffect(() => {
     const unsubscribeFinished = window.electronAPI?.onScanFinished?.((data: { output?: string }) => {
       const output = data.output || 'Scan completed with no output.';
@@ -664,12 +666,12 @@ function App() {
         setActionStatus({
           tone: 'success',
           message: result.destination
-            ? `Restored file: ${result.destination}`
-            : result.message,
+            ? `Restored file: ${result.destination}. Refresh scan when you want to reconcile results.`
+            : `${result.message} Refresh scan when you want to reconcile results.`,
         });
 
         await loadActionHistory();
-        triggerRescan();
+        setNeedsRescan(true);
       } else {
         console.error('Restore result:', result);
 
@@ -817,7 +819,7 @@ function App() {
       await loadActionHistory();
 
       if (rescanAfterSuccess) {
-        triggerRescan();
+        setNeedsRescan(true);
       }
 
       return {
@@ -947,6 +949,24 @@ function App() {
                 />
               </div>
             </div>
+
+            {needsRescan && !isScanning && (
+              <div className="mt-4 flex items-center gap-3">
+                <button
+                  onClick={() => {
+                    setNeedsRescan(false);
+                    triggerRescan();
+                  }}
+                  className="rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+                >
+                  Refresh Scan
+                </button>
+
+                <span className="text-sm text-slate-500">
+                  Changes have been made. Refresh to reconcile scan results.
+                </span>
+              </div>
+            )}
 
             <div className="flex flex-wrap gap-3">
               <ModePill
