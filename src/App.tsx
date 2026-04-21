@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Header from './components/Header';
 import ScanButton from './components/ScanButton';
+import InfoPanel from './components/InfoPanel';
 
 type ScanPreset = 'test' | 'desktop' | 'downloads' | 'documents' | 'custom';
 
@@ -331,6 +332,8 @@ function App() {
 
   const [duplicatePrimarySelections, setDuplicatePrimarySelections] = useState<Record<string, string>>({});
   const [busyDuplicateGroupId, setBusyDuplicateGroupId] = useState<string | null>(null);
+
+  const [isSupportOpen, setIsSupportOpen] = useState(false);
 
   useEffect(() => {
     const unsubscribeFinished = window.electronAPI?.onScanFinished?.((data: { output?: string }) => {
@@ -1089,10 +1092,304 @@ function App() {
 
   return (
     <div className="min-h-screen bg-[#f7f7f2] text-slate-900">
-      <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-6 py-8 md:px-8 lg:px-10">
-        <Header isScanning={isScanning} />
-
+      <div className="mx-auto flex min-h-screen w-full max-w-[1700px] flex-col px-5 py-6 md:px-8 lg:px-10">
+      <Header
+        isScanning={isScanning}
+        toggleSupport={() => setIsSupportOpen((prev) => !prev)}
+      />
         <main className="mt-8 space-y-8">
+        {isSupportOpen && (
+          <>
+            {/* BACKDROP */}
+            <div
+              className="fixed inset-0 z-40 bg-black/30"
+              onClick={() => setIsSupportOpen(false)}
+            />
+
+            {/* DRAWER */}
+            <div className="fixed left-0 top-0 z-50 h-full w-[340px] overflow-y-auto border-r border-slate-200 bg-white shadow-2xl">
+              <div className="p-6 space-y-6">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold text-slate-900">
+                    Workspace Support
+                  </div>
+
+                  <button
+                    onClick={() => setIsSupportOpen(false)}
+                    className="text-slate-500 transition hover:text-slate-900"
+                    aria-label="Close support panel"
+                  >
+                    ✕
+                  </button>
+                </div>
+                  {/* LEFT SUPPORT RAIL */}
+                  <SectionCard
+                    title="Recent Actions"
+                    subtitle="A local record of successful maintenance actions performed by DTM."
+                  >
+                    <div className="mb-4 flex flex-wrap gap-3">
+                      <button
+                        onClick={() => setHistoryFilter('undoable')}
+                        className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                          historyFilter === 'undoable'
+                            ? 'bg-slate-900 text-white shadow-sm'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        Undo Available
+                      </button>
+
+                      <button
+                        onClick={() => setHistoryFilter('all')}
+                        className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                          historyFilter === 'all'
+                            ? 'bg-slate-900 text-white shadow-sm'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        All Actions
+                      </button>
+
+                      <button
+                        onClick={() => setHistoryFilter('restored')}
+                        className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                          historyFilter === 'restored'
+                            ? 'bg-slate-900 text-white shadow-sm'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        Restored
+                      </button>
+                    </div>
+
+                    <div className="mb-3 text-xs text-slate-500">
+                      Showing {filteredActionHistory.length} item{filteredActionHistory.length === 1 ? '' : 's'}
+                      {historyFilter === 'undoable'
+                        ? ' with undo available'
+                        : historyFilter === 'restored'
+                        ? ' that have already been restored'
+                        : ' from action history'}
+                    </div>
+
+                    {filteredActionHistory.length === 0 ? (
+                      <p className="text-sm text-slate-500">
+                        {historyFilter === 'undoable'
+                          ? 'No undoable actions are currently available.'
+                          : historyFilter === 'restored'
+                          ? 'No restored actions have been logged yet.'
+                          : 'No actions have been logged yet.'}
+                      </p>
+                    ) : (
+                      <div className="max-h-[26rem] overflow-y-auto space-y-3 pr-1">
+                        {filteredActionHistory.map((entry) => {
+                          const filename = entry.source_path.split('/').pop() || entry.source_path;
+
+                          const actionLabel =
+                          entry.action === 'move_to_review'
+                            ? 'Moved to Review'
+                            : entry.action === 'move_to_archive'
+                            ? 'Moved to Archive'
+                            : entry.action === 'move_to_trash'
+                            ? 'Moved to Trash'
+                            : entry.action === 'restore_from_review'
+                            ? 'Restored from Review'
+                            : entry.action === 'restore_from_archive'
+                            ? 'Restored from Archive'
+                            : 'Restored from Trash';
+
+                          return (
+                            <div
+                              key={entry.id}
+                              className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4"
+                            >
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="text-sm font-semibold text-slate-900">
+                                  {actionLabel}
+                                </div>
+                                <div className="text-xs text-slate-500">
+                                  {new Date(entry.timestamp).toLocaleString()}
+                                </div>
+                              </div>
+
+                              <div className="mt-2 text-sm text-slate-700">{filename}</div>
+
+                              <div className="mt-2 text-xs text-slate-500 break-all">
+                                Source: {entry.source_path}
+                              </div>
+
+                              {entry.destination_path ? (
+                                <div className="mt-1 text-xs text-slate-500 break-all">
+                                  Destination: {entry.destination_path}
+                                </div>
+                              ) : null}
+
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
+                                  {entry.mode}
+                                </span>
+                                <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
+                                  {entry.status}
+                                </span>
+                              </div>
+
+                              {canUndoHistoryEntry(entry) ? (
+                                <div className="mt-4">
+                                  <button
+                                    onClick={() => handleUndoHistoryEntry(entry)}
+                                    disabled={busyHistoryId === entry.id || isBulkActing || isScanning}
+                                    className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                                  >
+                                    {busyHistoryId === entry.id ? 'Restoring…' : 'Undo'}
+                                  </button>
+                                </div>
+                              ) : null}
+
+                              {!canUndoHistoryEntry(entry) &&
+                              (
+                                entry.action === 'move_to_review' ||
+                                entry.action === 'move_to_archive' ||
+                                entry.action === 'move_to_trash'
+                              ) ? (
+                                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-500 ring-1 ring-slate-200">
+                                  already restored
+                                </span>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </SectionCard>
+
+                  <SectionCard
+                    title="Action Insights"
+                    subtitle="What each queue means and how DTM thinks about file decisions."
+                  >
+                    <div className="space-y-3">
+                      <InfoPanel title="How does DTM work?">
+                        <p>
+                          DTM scans your files and turns them into decision queues instead of showing everything at once.
+                        </p>
+                        <p>
+                          It is designed to be bounded, explainable, and reversible. DTM suggests actions, but you stay in control.
+                        </p>
+                      </InfoPanel>
+
+                      <InfoPanel title="What does 'Needs Review' mean?">
+                        <p>
+                          These files could not be confidently classified by DTM and need human judgment before action.
+                        </p>
+                        <p>
+                          This queue exists to prevent overconfident automation.
+                        </p>
+                      </InfoPanel>
+
+                      <InfoPanel title="What are 'Archive Candidates'?">
+                        <p>
+                          These files are likely worth keeping, but not keeping in your active workspace.
+                        </p>
+                        <p>
+                          Archiving reduces clutter without destroying information.
+                        </p>
+                      </InfoPanel>
+
+                      <InfoPanel title="What are 'Remove Candidates'?">
+                        <p>
+                          These files appear temporary, disposable, or low-value.
+                        </p>
+                        <p>
+                          DTM moves them to Trash rather than permanently deleting them.
+                        </p>
+                      </InfoPanel>
+
+                      <InfoPanel title="How do duplicate groups work?">
+                        <p>
+                          DTM groups files that appear to be copies of the same item family based on name patterns, size, and structure.
+                        </p>
+                        <p>
+                          You can select one copy to keep active and archive the others.
+                        </p>
+                      </InfoPanel>
+
+                      <InfoPanel title="What does confidence mean?">
+                        <p>
+                          Confidence reflects how strongly DTM believes a file belongs in a category.
+                        </p>
+                        <p>
+                          High confidence means a stronger heuristic match. Lower confidence means more ambiguity.
+                        </p>
+                      </InfoPanel>
+                    </div>
+                  </SectionCard>
+
+                  {insights && (
+                    <SectionCard
+                      title="DTM Insights"
+                      subtitle="High-level interpretation of your current digital environment."
+                    >
+                      <div className="space-y-3 text-sm text-slate-700">
+                        <p className="font-medium text-slate-900">{insights.summary}</p>
+
+                        <ul className="space-y-1">
+                          <li>• {insights.review} files need review</li>
+                          <li>• {insights.archive} files can likely be archived</li>
+                          <li>• {insights.remove} files appear safe to remove</li>
+                        </ul>
+
+                        <p>
+                          Most files have not been modified in over 180 days: {insights.oldFiles}
+                        </p>
+
+                        <p className="text-slate-600">
+                          Recommendation: Start by reviewing unknown files, then archive older compressed files.
+                        </p>
+                      </div>
+                    </SectionCard>
+                  )}
+
+                  {scanData && (
+                    <SectionCard
+                      title="Scan Summary"
+                      subtitle="current Scan scope and bounded result coverage"
+                    >
+                      <section className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4 shadow-sm">
+                      <div className="space-y-2 text-sm text-slate-700">
+                        <div>
+                          <span className="font-semibold">Scan mode:</span> {scanData.mode}
+                        </div>
+                        <div>
+                          <span className="font-semibold">Detailed review items shown:</span>{' '}
+                          {scanData.review_files.length} of {scanData.review_total}
+                        </div>
+                        <div>
+                          <span className="font-semibold">Detailed archive items shown:</span>{' '}
+                          {scanData.archive_candidates.length} of {scanData.archive_total}
+                        </div>
+                        <div>
+                          <span className="font-semibold">Detailed remove items shown:</span>{' '}
+                          {scanData.remove_candidates.length} of {scanData.remove_total}
+                        </div>
+                        <div>
+                          <span className="font-semibold">Excluded directories:</span>{' '}
+                          {scanData.excluded_dirs_count}
+                        </div>
+
+                        {scanData.scan_warnings?.length > 0 ? (
+                          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
+                            {scanData.scan_warnings.map((warning, index) => (
+                              <div key={index}>⚠️ {warning}</div>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    </section>
+                    </SectionCard>
+                  )}
+              </div>
+            </div>
+          </>
+        )}
+
           <div className="flex flex-col gap-5 rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
               <div>
@@ -1367,65 +1664,6 @@ function App() {
 
           {scanData ? (
             <>
-              {insights && (
-                <SectionCard
-                  title="DTM Insights"
-                  subtitle="High-level interpretation of your current digital environment."
-                >
-                  <div className="space-y-3 text-sm text-slate-700">
-                    <p className="font-medium text-slate-900">{insights.summary}</p>
-
-                    <ul className="space-y-1">
-                      <li>• {insights.review} files need review</li>
-                      <li>• {insights.archive} files can likely be archived</li>
-                      <li>• {insights.remove} files appear safe to remove</li>
-                    </ul>
-
-                    <p>
-                      Most files have not been modified in over 180 days: {insights.oldFiles}
-                    </p>
-
-                    <p className="text-slate-600">
-                      Recommendation: Start by reviewing unknown files, then archive older compressed files.
-                    </p>
-                  </div>
-                </SectionCard>
-              )}
-
-              {scanData && (
-                <section className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4 shadow-sm">
-                  <div className="space-y-2 text-sm text-slate-700">
-                    <div>
-                      <span className="font-semibold">Scan mode:</span> {scanData.mode}
-                    </div>
-                    <div>
-                      <span className="font-semibold">Detailed review items shown:</span>{' '}
-                      {scanData.review_files.length} of {scanData.review_total}
-                    </div>
-                    <div>
-                      <span className="font-semibold">Detailed archive items shown:</span>{' '}
-                      {scanData.archive_candidates.length} of {scanData.archive_total}
-                    </div>
-                    <div>
-                      <span className="font-semibold">Detailed remove items shown:</span>{' '}
-                      {scanData.remove_candidates.length} of {scanData.remove_total}
-                    </div>
-                    <div>
-                      <span className="font-semibold">Excluded directories:</span>{' '}
-                      {scanData.excluded_dirs_count}
-                    </div>
-
-                    {scanData.scan_warnings?.length > 0 ? (
-                      <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
-                        {scanData.scan_warnings.map((warning, index) => (
-                          <div key={index}>⚠️ {warning}</div>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                </section>
-              )}
-              
               <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <StatCard label="Total files" value={scanData.total_files} tone="neutral" />
                 <StatCard
@@ -1444,144 +1682,6 @@ function App() {
                   tone={scanData.errors.length > 0 ? 'danger' : 'good'}
                 />
               </section>
-
-              <SectionCard
-                title="Recent Actions"
-                subtitle="A local record of successful maintenance actions performed by DTM."
-              >
-                <div className="mb-4 flex flex-wrap gap-3">
-                  <button
-                    onClick={() => setHistoryFilter('undoable')}
-                    className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                      historyFilter === 'undoable'
-                        ? 'bg-slate-900 text-white shadow-sm'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
-                  >
-                    Undo Available
-                  </button>
-
-                  <button
-                    onClick={() => setHistoryFilter('all')}
-                    className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                      historyFilter === 'all'
-                        ? 'bg-slate-900 text-white shadow-sm'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
-                  >
-                    All Actions
-                  </button>
-
-                  <button
-                    onClick={() => setHistoryFilter('restored')}
-                    className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                      historyFilter === 'restored'
-                        ? 'bg-slate-900 text-white shadow-sm'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
-                  >
-                    Restored
-                  </button>
-                </div>
-
-                <div className="mb-3 text-xs text-slate-500">
-                  Showing {filteredActionHistory.length} item{filteredActionHistory.length === 1 ? '' : 's'}
-                  {historyFilter === 'undoable'
-                    ? ' with undo available'
-                    : historyFilter === 'restored'
-                    ? ' that have already been restored'
-                    : ' from action history'}
-                </div>
-
-                {filteredActionHistory.length === 0 ? (
-                  <p className="text-sm text-slate-500">
-                    {historyFilter === 'undoable'
-                      ? 'No undoable actions are currently available.'
-                      : historyFilter === 'restored'
-                      ? 'No restored actions have been logged yet.'
-                      : 'No actions have been logged yet.'}
-                  </p>
-                ) : (
-                  <div className="space-y-3">
-                    {filteredActionHistory.map((entry) => {
-                      const filename = entry.source_path.split('/').pop() || entry.source_path;
-
-                      const actionLabel =
-                      entry.action === 'move_to_review'
-                        ? 'Moved to Review'
-                        : entry.action === 'move_to_archive'
-                        ? 'Moved to Archive'
-                        : entry.action === 'move_to_trash'
-                        ? 'Moved to Trash'
-                        : entry.action === 'restore_from_review'
-                        ? 'Restored from Review'
-                        : entry.action === 'restore_from_archive'
-                        ? 'Restored from Archive'
-                        : 'Restored from Trash';
-
-                      return (
-                        <div
-                          key={entry.id}
-                          className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4"
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="text-sm font-semibold text-slate-900">
-                              {actionLabel}
-                            </div>
-                            <div className="text-xs text-slate-500">
-                              {new Date(entry.timestamp).toLocaleString()}
-                            </div>
-                          </div>
-
-                          <div className="mt-2 text-sm text-slate-700">{filename}</div>
-
-                          <div className="mt-2 text-xs text-slate-500 break-all">
-                            Source: {entry.source_path}
-                          </div>
-
-                          {entry.destination_path ? (
-                            <div className="mt-1 text-xs text-slate-500 break-all">
-                              Destination: {entry.destination_path}
-                            </div>
-                          ) : null}
-
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
-                              {entry.mode}
-                            </span>
-                            <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
-                              {entry.status}
-                            </span>
-                          </div>
-
-                          {canUndoHistoryEntry(entry) ? (
-                            <div className="mt-4">
-                              <button
-                                onClick={() => handleUndoHistoryEntry(entry)}
-                                disabled={busyHistoryId === entry.id || isBulkActing || isScanning}
-                                className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-                              >
-                                {busyHistoryId === entry.id ? 'Restoring…' : 'Undo'}
-                              </button>
-                            </div>
-                          ) : null}
-
-                          {!canUndoHistoryEntry(entry) &&
-                          (
-                            entry.action === 'move_to_review' ||
-                            entry.action === 'move_to_archive' ||
-                            entry.action === 'move_to_trash'
-                          ) ? (
-                            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-500 ring-1 ring-slate-200">
-                              already restored
-                            </span>
-                          ) : null}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </SectionCard>
 
               <section className="grid grid-cols-1 gap-6 xl:grid-cols-3">
                 <SectionCard
@@ -1615,596 +1715,595 @@ function App() {
                 </SectionCard>
               </section>
 
-              <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-                <SectionCard
-                  title="Needs Review"
-                  subtitle="Files that need human judgment before DTM can confidently relocate or remove them."
-                >
-                  {sortedReviewFiles.length > 0 ? (
-                    <div className="mb-3 text-xs text-slate-500">
-                      Showing {visibleReviewFiles.length} of {scanData.review_total} review items
-                    </div>
-                  ) : null}
-
-                  {visibleReviewFiles.length > 0 ? (
-                    <div className="mb-4 flex flex-wrap gap-3">
-                      <button
-                        onClick={handleBulkMoveToReview}
-                        disabled={
-                          isBulkActing ||
-                          isScanning ||
-                          visibleReviewFiles.length === 0
-                        }
-                        className="rounded-full bg-amber-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-                      >
-                        {isBulkActing && bulkProgress?.action === 'review'
-                          ? 'Bulk moving…'
-                          : `Move visible ${visibleReviewFiles.length} to Review`}
-                      </button>
-                    </div>
-                  ) : null}
-
-                  {sortedReviewFiles.length > 0 ? (
-                    <QueueSortControls
-                      sortKey={reviewSortKey}
-                      sortDirection={reviewSortDirection}
-                      onSortKeyChange={setReviewSortKey}
-                      onSortDirectionChange={setReviewSortDirection}
-                      disabled={isBulkActing}
-                    />
-                  ) : null}
-
-                  {scanData.review_files.length === 0 ? (
-                    <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
-                      No suspicious files detected in this scan.
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {visibleReviewFiles.map((file) => (
-                        <div
-                          key={file.path}
-                          className="flex items-start gap-4 rounded-3xl border border-amber-200 bg-amber-50 p-4"
-                        >
-                          <FileBadge filename={file.name} />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <h3 className="text-sm font-semibold text-amber-950">{file.name}</h3>
-                              <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200">
-                                {file.category.replace(/_/g, ' ')}
-                              </span>
-                            </div>
-                        
-                            <p className="mt-2 break-all text-xs leading-5 text-amber-900/80">
-                              {file.path}
-                            </p>
-                        
-                            <div className="mt-3 rounded-2xl bg-white/60 px-3 py-3 space-y-2">
-                              <div className="text-xs text-amber-900/80">
-                                <span className="font-semibold">Reason:</span> {file.reason}
-                              </div>
-                              <div className="text-xs text-amber-900/70">
-                                <span className="font-semibold">Confidence:</span> {file.confidence}
-                              </div>
-                              <div className="text-xs text-amber-900/70">
-                                <span className="font-semibold">Recommended action:</span> {file.recommended_action}
-                              </div>
-                            </div>
-                        
-                            <div className="mt-4 flex flex-wrap gap-3">
-                              <button
-                                onClick={() => handleMoveToReview(file.path)}
-                                disabled={busyPath === file.path || isBulkActing}
-                                className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
-                                  busyPath === file.path
-                                    ? 'cursor-not-allowed bg-slate-200 text-slate-500'
-                                    : 'bg-slate-900 text-white hover:bg-slate-700'
-                                }`}
-                              >
-                                {busyPath === file.path ? 'Moving…' : 'Move to Review'}
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-
-                      {sortedReviewFiles.length > 8 ? (
-                        <div className="mt-4 flex gap-3">
-                          {reviewVisibleCount < sortedReviewFiles.length ? (
-                            <button
-                              onClick={() =>
-                                setReviewVisibleCount((prev) =>
-                                  Math.min(prev + 8, sortedReviewFiles.length)
-                                )
-                              }
-                              className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
-                            >
-                              Show more
-                            </button>
-                          ) : null}
-
-                          {reviewVisibleCount > 8 ? (
-                            <button
-                              onClick={() => setReviewVisibleCount(8)}
-                              className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
-                            >
-                              Show less
-                            </button>
-                          ) : null}
+              <section className="space-y-6">
+                <div className="space-y-6">
+                  {/* MAIN WORKSPACE */}
+                  <section className="grid grid-cols-1 gap-6 xl:grid-cols-2"> 
+                    <SectionCard
+                      title="Needs Review"
+                      subtitle="Files that need human judgment before DTM can confidently relocate or remove them."
+                    >
+                      {sortedReviewFiles.length > 0 ? (
+                        <div className="mb-3 text-xs text-slate-500">
+                          Showing {visibleReviewFiles.length} of {scanData.review_total} review items
                         </div>
                       ) : null}
-                    </div>
-                  )}
-                </SectionCard>
 
-                <SectionCard
-                  title="Duplicate Review"
-                  subtitle="Grouped file families that appear to contain duplicate copies."
-                >
-                  {visibleDuplicates.length > 0 ? (
-                    <div className="mb-3 text-xs text-slate-500">
-                      Showing {visibleDuplicates.length} of {scanData.duplicates_total} duplicate groups
-                    </div>
-                  ) : null}
-
-                  {scanData.duplicates.length === 0 ? (
-                    <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
-                      No duplicate groups detected in this scan.
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {visibleDuplicates.map((group, index) => {
-                        const selectedPrimaryPath = getSelectedDuplicatePrimaryPath(group);
-
-                        return (
-                          <div
-                            key={`${group.group_id}-${index}`}
-                            className="rounded-3xl border border-slate-200 bg-slate-50 p-4"
+                      {visibleReviewFiles.length > 0 ? (
+                        <div className="mb-4 flex flex-wrap gap-3">
+                          <button
+                            onClick={handleBulkMoveToReview}
+                            disabled={
+                              isBulkActing ||
+                              isScanning ||
+                              visibleReviewFiles.length === 0
+                            }
+                            className="rounded-full bg-amber-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
                           >
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div>
-                                <div className="text-sm font-semibold text-slate-900">
-                                  Duplicate Group {index + 1}
+                            {isBulkActing && bulkProgress?.action === 'review'
+                              ? 'Bulk moving…'
+                              : `Move visible ${visibleReviewFiles.length} to Review`}
+                          </button>
+                        </div>
+                      ) : null}
+
+                      {sortedReviewFiles.length > 0 ? (
+                        <QueueSortControls
+                          sortKey={reviewSortKey}
+                          sortDirection={reviewSortDirection}
+                          onSortKeyChange={setReviewSortKey}
+                          onSortDirectionChange={setReviewSortDirection}
+                          disabled={isBulkActing}
+                        />
+                      ) : null}
+
+                      {scanData.review_files.length === 0 ? (
+                        <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
+                          No suspicious files detected in this scan.
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {visibleReviewFiles.map((file) => (
+                            <div
+                              key={file.path}
+                              className="flex items-start gap-4 rounded-3xl border border-amber-200 bg-amber-50 p-4"
+                            >
+                              <FileBadge filename={file.name} />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <h3 className="text-sm font-semibold text-amber-950">{file.name}</h3>
+                                  <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200">
+                                    {file.category.replace(/_/g, ' ')}
+                                  </span>
                                 </div>
-                                <div className="mt-1 text-xs text-slate-500">
-                                  {group.items.length} files · confidence: {group.confidence}
-                                </div>
-                              </div>
-
-                              <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
-                                Grouped
-                              </span>
-                            </div>
-
-                            <div className="mt-3 rounded-2xl bg-white p-3">
-                              <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400">
-                                Reason
-                              </div>
-                              <div className="mt-2 text-sm text-slate-700">{group.reason}</div>
-                            </div>
-
-                            <div className="mt-4 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3">
-                              <div className="flex flex-wrap items-center justify-between gap-3">
-                                <div>
-                                  <div className="text-sm font-semibold text-sky-900">
-                                    Resolution
+                            
+                                <p className="mt-2 break-all text-xs leading-5 text-amber-900/80">
+                                  {file.path}
+                                </p>
+                            
+                                <div className="mt-3 rounded-2xl bg-white/60 px-3 py-3 space-y-2">
+                                  <div className="text-xs text-amber-900/80">
+                                    <span className="font-semibold">Reason:</span> {file.reason}
                                   </div>
-                                  <div className="mt-1 text-xs text-sky-700">
-                                    Select one file to keep active, then archive the other copies.
+                                  <div className="text-xs text-amber-900/70">
+                                    <span className="font-semibold">Confidence:</span> {file.confidence}
+                                  </div>
+                                  <div className="text-xs text-amber-900/70">
+                                    <span className="font-semibold">Recommended action:</span> {file.recommended_action}
                                   </div>
                                 </div>
-
-                                <button
-                                  onClick={() => handleArchiveDuplicateGroup(group)}
-                                  disabled={
-                                    busyDuplicateGroupId === group.group_id ||
-                                    isBulkActing ||
-                                    isScanning ||
-                                    group.items.length < 2
-                                  }
-                                  className="rounded-full bg-sky-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-                                >
-                                  {busyDuplicateGroupId === group.group_id
-                                    ? 'Resolving…'
-                                    : `Archive other copies (${Math.max(group.items.length - 1, 0)})`}
-                                </button>
-                              </div>
-                            </div>
-
-                            <div className="mt-4 space-y-3">
-                              {group.items.map((item, itemIndex) => {
-                                const likelyPrimary = isLikelyPrimaryDuplicateItem(item, itemIndex);
-                                const isSelectedPrimary = item.path === selectedPrimaryPath;
-
-                                return (
-                                  <div
-                                    key={item.path}
-                                    className={`rounded-2xl p-3 ring-1 ${
-                                      isSelectedPrimary
-                                        ? 'bg-emerald-50 ring-emerald-200'
-                                        : 'bg-white ring-slate-200'
+                            
+                                <div className="mt-4 flex flex-wrap gap-3">
+                                  <button
+                                    onClick={() => handleMoveToReview(file.path)}
+                                    disabled={busyPath === file.path || isBulkActing}
+                                    className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
+                                      busyPath === file.path
+                                        ? 'cursor-not-allowed bg-slate-200 text-slate-500'
+                                        : 'bg-slate-900 text-white hover:bg-slate-700'
                                     }`}
                                   >
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      <div className="text-sm font-semibold text-slate-900">
-                                        {item.name}
-                                      </div>
+                                    {busyPath === file.path ? 'Moving…' : 'Move to Review'}
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
 
-                                      {isSelectedPrimary ? (
-                                        <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-medium text-emerald-800 ring-1 ring-emerald-200">
-                                          Selected primary
-                                        </span>
-                                      ) : likelyPrimary ? (
-                                        <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-200">
-                                          Likely primary
-                                        </span>
-                                      ) : (
-                                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
-                                          Likely copy
-                                        </span>
-                                      )}
+                          {sortedReviewFiles.length > 8 ? (
+                            <div className="mt-4 flex gap-3">
+                              {reviewVisibleCount < sortedReviewFiles.length ? (
+                                <button
+                                  onClick={() =>
+                                    setReviewVisibleCount((prev) =>
+                                      Math.min(prev + 8, sortedReviewFiles.length)
+                                    )
+                                  }
+                                  className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
+                                >
+                                  Show more
+                                </button>
+                              ) : null}
+
+                              {reviewVisibleCount > 8 ? (
+                                <button
+                                  onClick={() => setReviewVisibleCount(8)}
+                                  className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                                >
+                                  Show less
+                                </button>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
+                    </SectionCard>
+
+                    <SectionCard
+                      title="Archive Candidates"
+                      subtitle="Files that are likely worth keeping, but not keeping in your active workspace."
+                    >
+                      {sortedArchiveCandidates.length > 0 ? ( 
+                        <div className="mb-3 text-xs text-slate-500">
+                          Showing {visibleArchiveCandidates.length} of {scanData.archive_total} archive candidates
+                        </div>
+                      ) : null}
+                      
+                      {visibleArchiveCandidates.length > 0 ? ( 
+                        <div className="mb-4 flex flex-wrap gap-3">
+                          <button
+                            onClick={handleBulkMoveToArchive}
+                            disabled={
+                              isBulkActing ||
+                              isScanning ||
+                              visibleArchiveCandidates.length === 0
+                            }
+                            className="rounded-full bg-sky-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                          >
+                            {isBulkActing && bulkProgress?.action === 'archive'
+                              ? 'Bulk archiving…'
+                              : `Move visible ${visibleArchiveCandidates.length} to Archive`}
+                          </button>
+                        </div>
+                      ) : null}
+
+                      {sortedArchiveCandidates.length > 0 ? (
+                        <QueueSortControls
+                          sortKey={archiveSortKey}
+                          sortDirection={archiveSortDirection}
+                          onSortKeyChange={setArchiveSortKey}
+                          onSortDirectionChange={setArchiveSortDirection}
+                          disabled={isBulkActing}
+                        />
+                      ) : null}
+
+                      {scanData.archive_candidates.length === 0 ? (
+                        <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
+                          No archive candidates detected in this scan.
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {visibleArchiveCandidates.map((file) => (
+                            <div
+                              key={file.path}
+                              className="flex items-start gap-4 rounded-3xl border border-sky-200 bg-sky-50 p-4"
+                            >
+                              <FileBadge filename={file.name} />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <h3 className="text-sm font-semibold text-sky-950">{file.name}</h3>
+                                  <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-sky-800 ring-1 ring-sky-200">
+                                    {file.category.replace(/_/g, ' ')}
+                                  </span>
+                                </div>
+                            
+                                <p className="mt-2 break-all text-xs leading-5 text-sky-900/80">
+                                  {file.path}
+                                </p>
+                            
+                                <div className="mt-3 rounded-2xl bg-white/60 px-3 py-3 space-y-2">
+                                  <div className="text-xs text-sky-900/80">
+                                    <span className="font-semibold">Reason:</span> {file.reason}
+                                  </div>
+                                  <div className="text-xs text-sky-900/70">
+                                    <span className="font-semibold">Confidence:</span> {file.confidence}
+                                  </div>
+                                  <div className="text-xs text-sky-900/70">
+                                    <span className="font-semibold">Recommended action:</span> {file.recommended_action}
+                                  </div>
+                                </div>
+                            
+                                <div className="mt-4 flex flex-wrap gap-3">
+                                  <button
+                                    onClick={() => handleMoveToArchive(file.path)}
+                                    disabled={busyPath === file.path || isBulkActing}
+                                    className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
+                                      busyPath === file.path
+                                        ? 'cursor-not-allowed bg-slate-200 text-slate-500'
+                                        : 'bg-sky-900 text-white hover:bg-sky-700'
+                                    }`}
+                                  >
+                                    {busyPath === file.path ? 'Archiving…' : 'Move to Archive'}
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+
+                          {sortedArchiveCandidates.length > 8 ? (
+                            <div className="mt-4 flex gap-3">
+                              {archiveVisibleCount < sortedArchiveCandidates.length ? (
+                                <button
+                                  onClick={() =>
+                                    setArchiveVisibleCount((prev) =>
+                                      Math.min(prev + 8, sortedArchiveCandidates.length)
+                                    )
+                                  }
+                                  className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
+                                >
+                                  Show more
+                                </button>
+                              ) : null}
+
+                              {archiveVisibleCount > 8 ? (
+                                <button
+                                  onClick={() => setArchiveVisibleCount(8)}
+                                  className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                                >
+                                  Show less
+                                </button>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
+                    </SectionCard>
+
+                    <SectionCard
+                      title="Remove Candidates"
+                      subtitle="Files that appear disposable, temporary, or low-value based on current rules."
+                    >
+                      {sortedRemoveCandidates.length > 0 ? (
+                        <div className="mb-3 text-xs text-slate-500">
+                          Showing {visibleRemoveCandidates.length} of {scanData.remove_total} remove candidates
+                        </div>
+                      ) : null}
+
+                      {visibleRemoveCandidates.length > 0 ? (
+                        <div className="mb-4 flex flex-wrap gap-3">
+                          <button
+                            onClick={handleBulkMoveToTrash}
+                            disabled={
+                              isBulkActing ||
+                              isScanning ||
+                              visibleRemoveCandidates.length === 0
+                            }
+                            className="rounded-full bg-rose-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-rose-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                          >
+                            {isBulkActing && bulkProgress?.action === 'remove'
+                              ? 'Bulk removing…'
+                              : `Move visible ${visibleRemoveCandidates.length} to Trash`}
+                          </button>
+                        </div>
+                      ) : null}
+
+                      {sortedRemoveCandidates.length > 0 ? (
+                        <QueueSortControls
+                          sortKey={removeSortKey}
+                          sortDirection={removeSortDirection}
+                          onSortKeyChange={setRemoveSortKey}
+                          onSortDirectionChange={setRemoveSortDirection}
+                          disabled={isBulkActing}
+                        />
+                      ) : null}
+
+                      {scanData.remove_candidates.length === 0 ? (
+                        <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
+                          No remove candidates detected in this scan.
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {visibleRemoveCandidates.map((file) => (
+                            <div
+                              key={file.path}
+                              className="flex items-start gap-4 rounded-3xl border border-rose-200 bg-rose-50 p-4"
+                            >
+                              <FileBadge filename={file.name} />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <h3 className="text-sm font-semibold text-rose-950">{file.name}</h3>
+                                  <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-rose-800 ring-1 ring-rose-200">
+                                    {file.category.replace(/_/g, ' ')}
+                                  </span>
+                                </div>
+                            
+                                <p className="mt-2 break-all text-xs leading-5 text-rose-900/80">
+                                  {file.path}
+                                </p>
+                            
+                                <div className="mt-3 rounded-2xl bg-white/60 px-3 py-3 space-y-2">
+                                  <div className="text-xs text-rose-900/80">
+                                    <span className="font-semibold">Reason:</span> {file.reason}
+                                  </div>
+                                  <div className="text-xs text-rose-900/70">
+                                    <span className="font-semibold">Confidence:</span> {file.confidence}
+                                  </div>
+                                  <div className="text-xs text-rose-900/70">
+                                    <span className="font-semibold">Recommended action:</span> {file.recommended_action}
+                                  </div>
+                                </div>
+                            
+                                <div className="mt-4 flex flex-wrap gap-3">
+                                  <button
+                                    onClick={() => handleMoveToTrash(file.path)}
+                                    disabled={busyPath === file.path || isBulkActing}
+                                    className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
+                                      busyPath === file.path
+                                        ? 'cursor-not-allowed bg-slate-200 text-slate-500'
+                                        : 'bg-rose-900 text-white hover:bg-rose-700'
+                                    }`}
+                                  >
+                                    {busyPath === file.path ? 'Removing…' : 'Move to Trash'}
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+
+                          {sortedRemoveCandidates.length > 8 ? (
+                            <div className="mt-4 flex gap-3">
+                              {removeVisibleCount < sortedRemoveCandidates.length ? (
+                                <button
+                                  onClick={() =>
+                                    setRemoveVisibleCount((prev) =>
+                                      Math.min(prev + 8, sortedRemoveCandidates.length)
+                                    )
+                                  }
+                                  className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
+                                >
+                                  Show more
+                                </button>
+                              ) : null}
+
+                              {removeVisibleCount > 8 ? (
+                                <button
+                                  onClick={() => setRemoveVisibleCount(8)}
+                                  className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                                >
+                                  Show less
+                                </button>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
+                    </SectionCard>
+
+                    <SectionCard
+                      title="Duplicate Review"
+                      subtitle="Grouped file families that appear to contain duplicate copies."
+                    >
+                      {visibleDuplicates.length > 0 ? (
+                        <div className="mb-3 text-xs text-slate-500">
+                          Showing {visibleDuplicates.length} of {scanData.duplicates_total} duplicate groups
+                        </div>
+                      ) : null}
+
+                      {scanData.duplicates.length === 0 ? (
+                        <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
+                          No duplicate groups detected in this scan.
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          {visibleDuplicates.map((group, index) => {
+                            const selectedPrimaryPath = getSelectedDuplicatePrimaryPath(group);
+
+                            return (
+                              <div
+                                key={`${group.group_id}-${index}`}
+                                className="rounded-3xl border border-slate-200 bg-slate-50 p-4"
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div>
+                                    <div className="text-sm font-semibold text-slate-900">
+                                      Duplicate Group {index + 1}
                                     </div>
-
-                                    <div className="mt-2 break-all text-xs text-slate-600">
-                                      {item.path}
-                                    </div>
-
-                                    <div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-500">
-                                      <span>Size: {item.size.toLocaleString()} bytes</span>
-                                      <span>Age: {item.age_days} days</span>
-                                      <span>Type: {item.ext}</span>
-                                    </div>
-
-                                    <div className="mt-4 flex flex-wrap gap-3">
-                                      <button
-                                        onClick={() => setDuplicatePrimarySelection(group.group_id, item.path)}
-                                        disabled={busyDuplicateGroupId === group.group_id || isBulkActing || isScanning}
-                                        className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
-                                          isSelectedPrimary
-                                            ? 'bg-emerald-700 text-white'
-                                            : 'bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50'
-                                        } disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500`}
-                                      >
-                                        {isSelectedPrimary ? 'Keeping this one' : 'Keep this one'}
-                                      </button>
-
-                                      {!isSelectedPrimary ? (
-                                        <button
-                                          onClick={() => handleArchiveDuplicate(item.path)}
-                                          disabled={busyPath === item.path || busyDuplicateGroupId === group.group_id || isBulkActing}
-                                          className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
-                                            busyPath === item.path
-                                              ? 'cursor-not-allowed bg-slate-200 text-slate-500'
-                                              : 'bg-sky-900 text-white hover:bg-sky-700'
-                                          }`}
-                                        >
-                                          {busyPath === item.path ? 'Archiving…' : 'Archive This Copy'}
-                                        </button>
-                                      ) : null}
+                                    <div className="mt-1 text-xs text-slate-500">
+                                      {group.items.length} files · confidence: {group.confidence}
                                     </div>
                                   </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })}
 
-                      {scanData.duplicates.length > 8 ? (
-                        <div className="mt-4 flex gap-3">
-                          {duplicateVisibleCount < scanData.duplicates.length ? (
-                            <button
-                              onClick={() =>
-                                setDuplicateVisibleCount((prev) =>
-                                  Math.min(prev + 8, scanData.duplicates.length)
-                                )
-                              }
-                              className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
-                            >
-                              Show more
-                            </button>
-                          ) : null}
+                                  <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
+                                    Grouped
+                                  </span>
+                                </div>
 
-                          {duplicateVisibleCount > 8 ? (
-                            <button
-                              onClick={() => setDuplicateVisibleCount(8)}
-                              className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
-                            >
-                              Show less
-                            </button>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-                  )}
-                </SectionCard>
-              </section>
+                                <div className="mt-3 rounded-2xl bg-white p-3">
+                                  <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400">
+                                    Reason
+                                  </div>
+                                  <div className="mt-2 text-sm text-slate-700">{group.reason}</div>
+                                </div>
 
-              <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-                <SectionCard
-                  title="Archive Candidates"
-                  subtitle="Files that are likely worth keeping, but not keeping in your active workspace."
-                >
-                  {sortedArchiveCandidates.length > 0 ? ( 
-                    <div className="mb-3 text-xs text-slate-500">
-                      Showing {visibleArchiveCandidates.length} of {scanData.archive_total} archive candidates
-                    </div>
-                  ) : null}
-                  
-                  {visibleArchiveCandidates.length > 0 ? ( 
-                    <div className="mb-4 flex flex-wrap gap-3">
-                      <button
-                        onClick={handleBulkMoveToArchive}
-                        disabled={
-                          isBulkActing ||
-                          isScanning ||
-                          visibleArchiveCandidates.length === 0
-                        }
-                        className="rounded-full bg-sky-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-                      >
-                        {isBulkActing && bulkProgress?.action === 'archive'
-                          ? 'Bulk archiving…'
-                          : `Move visible ${visibleArchiveCandidates.length} to Archive`}
-                      </button>
-                    </div>
-                  ) : null}
+                                <div className="mt-4 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3">
+                                  <div className="flex flex-wrap items-center justify-between gap-3">
+                                    <div>
+                                      <div className="text-sm font-semibold text-sky-900">
+                                        Resolution
+                                      </div>
+                                      <div className="mt-1 text-xs text-sky-700">
+                                        Select one file to keep active, then archive the other copies.
+                                      </div>
+                                    </div>
 
-                  {sortedArchiveCandidates.length > 0 ? (
-                    <QueueSortControls
-                      sortKey={archiveSortKey}
-                      sortDirection={archiveSortDirection}
-                      onSortKeyChange={setArchiveSortKey}
-                      onSortDirectionChange={setArchiveSortDirection}
-                      disabled={isBulkActing}
-                    />
-                  ) : null}
+                                    <button
+                                      onClick={() => handleArchiveDuplicateGroup(group)}
+                                      disabled={
+                                        busyDuplicateGroupId === group.group_id ||
+                                        isBulkActing ||
+                                        isScanning ||
+                                        group.items.length < 2
+                                      }
+                                      className="rounded-full bg-sky-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                                    >
+                                      {busyDuplicateGroupId === group.group_id
+                                        ? 'Resolving…'
+                                        : `Archive other copies (${Math.max(group.items.length - 1, 0)})`}
+                                    </button>
+                                  </div>
+                                </div>
 
-                  {scanData.archive_candidates.length === 0 ? (
-                    <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
-                      No archive candidates detected in this scan.
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {visibleArchiveCandidates.map((file) => (
-                        <div
-                          key={file.path}
-                          className="flex items-start gap-4 rounded-3xl border border-sky-200 bg-sky-50 p-4"
-                        >
-                          <FileBadge filename={file.name} />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <h3 className="text-sm font-semibold text-sky-950">{file.name}</h3>
-                              <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-sky-800 ring-1 ring-sky-200">
-                                {file.category.replace(/_/g, ' ')}
-                              </span>
-                            </div>
-                        
-                            <p className="mt-2 break-all text-xs leading-5 text-sky-900/80">
-                              {file.path}
-                            </p>
-                        
-                            <div className="mt-3 rounded-2xl bg-white/60 px-3 py-3 space-y-2">
-                              <div className="text-xs text-sky-900/80">
-                                <span className="font-semibold">Reason:</span> {file.reason}
+                                <div className="mt-4 space-y-3">
+                                  {group.items.map((item, itemIndex) => {
+                                    const likelyPrimary = isLikelyPrimaryDuplicateItem(item, itemIndex);
+                                    const isSelectedPrimary = item.path === selectedPrimaryPath;
+
+                                    return (
+                                      <div
+                                        key={item.path}
+                                        className={`rounded-2xl p-3 ring-1 ${
+                                          isSelectedPrimary
+                                            ? 'bg-emerald-50 ring-emerald-200'
+                                            : 'bg-white ring-slate-200'
+                                        }`}
+                                      >
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <div className="text-sm font-semibold text-slate-900">
+                                            {item.name}
+                                          </div>
+
+                                          {isSelectedPrimary ? (
+                                            <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-medium text-emerald-800 ring-1 ring-emerald-200">
+                                              Selected primary
+                                            </span>
+                                          ) : likelyPrimary ? (
+                                            <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-200">
+                                              Likely primary
+                                            </span>
+                                          ) : (
+                                            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
+                                              Likely copy
+                                            </span>
+                                          )}
+                                        </div>
+
+                                        <div className="mt-2 break-all text-xs text-slate-600">
+                                          {item.path}
+                                        </div>
+
+                                        <div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-500">
+                                          <span>Size: {item.size.toLocaleString()} bytes</span>
+                                          <span>Age: {item.age_days} days</span>
+                                          <span>Type: {item.ext}</span>
+                                        </div>
+
+                                        <div className="mt-4 flex flex-wrap gap-3">
+                                          <button
+                                            onClick={() => setDuplicatePrimarySelection(group.group_id, item.path)}
+                                            disabled={busyDuplicateGroupId === group.group_id || isBulkActing || isScanning}
+                                            className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
+                                              isSelectedPrimary
+                                                ? 'bg-emerald-700 text-white'
+                                                : 'bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50'
+                                            } disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500`}
+                                          >
+                                            {isSelectedPrimary ? 'Keeping this one' : 'Keep this one'}
+                                          </button>
+
+                                          {!isSelectedPrimary ? (
+                                            <button
+                                              onClick={() => handleArchiveDuplicate(item.path)}
+                                              disabled={busyPath === item.path || busyDuplicateGroupId === group.group_id || isBulkActing}
+                                              className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
+                                                busyPath === item.path
+                                                  ? 'cursor-not-allowed bg-slate-200 text-slate-500'
+                                                  : 'bg-sky-900 text-white hover:bg-sky-700'
+                                              }`}
+                                            >
+                                              {busyPath === item.path ? 'Archiving…' : 'Archive This Copy'}
+                                            </button>
+                                          ) : null}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               </div>
-                              <div className="text-xs text-sky-900/70">
-                                <span className="font-semibold">Confidence:</span> {file.confidence}
-                              </div>
-                              <div className="text-xs text-sky-900/70">
-                                <span className="font-semibold">Recommended action:</span> {file.recommended_action}
-                              </div>
-                            </div>
-                        
-                            <div className="mt-4 flex flex-wrap gap-3">
-                              <button
-                                onClick={() => handleMoveToArchive(file.path)}
-                                disabled={busyPath === file.path || isBulkActing}
-                                className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
-                                  busyPath === file.path
-                                    ? 'cursor-not-allowed bg-slate-200 text-slate-500'
-                                    : 'bg-sky-900 text-white hover:bg-sky-700'
-                                }`}
-                              >
-                                {busyPath === file.path ? 'Archiving…' : 'Move to Archive'}
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
+                            );
+                          })}
 
-                      {sortedArchiveCandidates.length > 8 ? (
-                        <div className="mt-4 flex gap-3">
-                          {archiveVisibleCount < sortedArchiveCandidates.length ? (
-                            <button
-                              onClick={() =>
-                                setArchiveVisibleCount((prev) =>
-                                  Math.min(prev + 8, sortedArchiveCandidates.length)
-                                )
-                              }
-                              className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
-                            >
-                              Show more
-                            </button>
-                          ) : null}
+                          {scanData.duplicates.length > 8 ? (
+                            <div className="mt-4 flex gap-3">
+                              {duplicateVisibleCount < scanData.duplicates.length ? (
+                                <button
+                                  onClick={() =>
+                                    setDuplicateVisibleCount((prev) =>
+                                      Math.min(prev + 8, scanData.duplicates.length)
+                                    )
+                                  }
+                                  className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
+                                >
+                                  Show more
+                                </button>
+                              ) : null}
 
-                          {archiveVisibleCount > 8 ? (
-                            <button
-                              onClick={() => setArchiveVisibleCount(8)}
-                              className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
-                            >
-                              Show less
-                            </button>
+                              {duplicateVisibleCount > 8 ? (
+                                <button
+                                  onClick={() => setDuplicateVisibleCount(8)}
+                                  className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                                >
+                                  Show less
+                                </button>
+                              ) : null}
+                            </div>
                           ) : null}
                         </div>
-                      ) : null}
-                    </div>
-                  )}
-                </SectionCard>
-
-                <SectionCard
-                  title="Remove Candidates"
-                  subtitle="Files that appear disposable, temporary, or low-value based on current rules."
-                >
-                  {sortedRemoveCandidates.length > 0 ? (
-                    <div className="mb-3 text-xs text-slate-500">
-                      Showing {visibleRemoveCandidates.length} of {scanData.remove_total} remove candidates
-                    </div>
-                  ) : null}
-
-                  {visibleRemoveCandidates.length > 0 ? (
-                    <div className="mb-4 flex flex-wrap gap-3">
-                      <button
-                        onClick={handleBulkMoveToTrash}
-                        disabled={
-                          isBulkActing ||
-                          isScanning ||
-                          visibleRemoveCandidates.length === 0
-                        }
-                        className="rounded-full bg-rose-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-rose-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-                      >
-                        {isBulkActing && bulkProgress?.action === 'remove'
-                          ? 'Bulk removing…'
-                          : `Move visible ${visibleRemoveCandidates.length} to Trash`}
-                      </button>
-                    </div>
-                  ) : null}
-
-                  {sortedRemoveCandidates.length > 0 ? (
-                    <QueueSortControls
-                      sortKey={removeSortKey}
-                      sortDirection={removeSortDirection}
-                      onSortKeyChange={setRemoveSortKey}
-                      onSortDirectionChange={setRemoveSortDirection}
-                      disabled={isBulkActing}
-                    />
-                  ) : null}
-
-                  {scanData.remove_candidates.length === 0 ? (
-                    <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
-                      No remove candidates detected in this scan.
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {visibleRemoveCandidates.map((file) => (
-                        <div
-                          key={file.path}
-                          className="flex items-start gap-4 rounded-3xl border border-rose-200 bg-rose-50 p-4"
-                        >
-                          <FileBadge filename={file.name} />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <h3 className="text-sm font-semibold text-rose-950">{file.name}</h3>
-                              <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-rose-800 ring-1 ring-rose-200">
-                                {file.category.replace(/_/g, ' ')}
-                              </span>
-                            </div>
-                        
-                            <p className="mt-2 break-all text-xs leading-5 text-rose-900/80">
-                              {file.path}
-                            </p>
-                        
-                            <div className="mt-3 rounded-2xl bg-white/60 px-3 py-3 space-y-2">
-                              <div className="text-xs text-rose-900/80">
-                                <span className="font-semibold">Reason:</span> {file.reason}
-                              </div>
-                              <div className="text-xs text-rose-900/70">
-                                <span className="font-semibold">Confidence:</span> {file.confidence}
-                              </div>
-                              <div className="text-xs text-rose-900/70">
-                                <span className="font-semibold">Recommended action:</span> {file.recommended_action}
-                              </div>
-                            </div>
-                        
-                            <div className="mt-4 flex flex-wrap gap-3">
-                              <button
-                                onClick={() => handleMoveToTrash(file.path)}
-                                disabled={busyPath === file.path || isBulkActing}
-                                className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
-                                  busyPath === file.path
-                                    ? 'cursor-not-allowed bg-slate-200 text-slate-500'
-                                    : 'bg-rose-900 text-white hover:bg-rose-700'
-                                }`}
-                              >
-                                {busyPath === file.path ? 'Removing…' : 'Move to Trash'}
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-
-                      {sortedRemoveCandidates.length > 8 ? (
-                        <div className="mt-4 flex gap-3">
-                          {removeVisibleCount < sortedRemoveCandidates.length ? (
-                            <button
-                              onClick={() =>
-                                setRemoveVisibleCount((prev) =>
-                                  Math.min(prev + 8, sortedRemoveCandidates.length)
-                                )
-                              }
-                              className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
-                            >
-                              Show more
-                            </button>
-                          ) : null}
-
-                          {removeVisibleCount > 8 ? (
-                            <button
-                              onClick={() => setRemoveVisibleCount(8)}
-                              className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
-                            >
-                              Show less
-                            </button>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-                  )}
-                </SectionCard>
-              </section>
-
-              {showSystemFiles ? (
-                <SectionCard
-                  title="System Files"
-                  subtitle="Files generated by the operating system or tooling, usually safe to ignore."
-                >
-                  {scanData.system_files.length === 0 ? (
-                    <p className="text-sm text-slate-500">No system files detected in this scan.</p>
-                  ) : (
-                    <div className="space-y-3">
-                      {scanData.system_files.slice(0, 10).map((file) => (
-                        <div
-                          key={file.path}
-                          className="flex items-start gap-4 rounded-3xl border border-slate-200 bg-slate-50 p-4"
-                        >
-                          <FileBadge filename={file.name} />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <h3 className="text-sm font-semibold text-slate-900">{file.name}</h3>
-                              <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 ring-1 ring-slate-200">
-                                {file.category.replace(/_/g, ' ')}
-                              </span>
-                            </div>
-                            <p className="mt-2 break-all text-xs leading-5 text-slate-700">{file.path}</p>
-
-                            <div className="mt-3 text-xs text-slate-600">
-                              <span className="font-semibold">Reason:</span> {file.reason}
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </SectionCard>
-              ) : null}
-
-              <SectionCard
-                title="Debug Output"
-                subtitle="Raw scan payload retained while the product evolves."
-              >
-                <div className="max-h-[28rem] overflow-y-auto rounded-2xl bg-slate-950 p-4 text-xs leading-6 text-slate-200">
-                  <pre className="whitespace-pre-wrap break-words">{scanOutput}</pre>
+                      )}
+                    </SectionCard>
+                  </section>
                 </div>
-              </SectionCard>
-            </>
+              </section>              
+
+              <section className="mx-auto flex min-h-screen w-full max-w-[1700px] flex-col px-5 py-6 md:px-8 lg:px-10">
+                {showSystemFiles ? (
+                  <SectionCard
+                    title="System Files"
+                    subtitle="Files generated by the operating system or tooling, usually safe to ignore."
+                  >
+                    {scanData.system_files.length === 0 ? (
+                      <p className="text-sm text-slate-500">No system files detected in this scan.</p>
+                    ) : (
+                      <div className="space-y-3">
+                        {scanData.system_files.slice(0, 10).map((file) => (
+                          <div
+                            key={file.path}
+                            className="flex items-start gap-4 rounded-3xl border border-slate-200 bg-slate-50 p-4"
+                          >
+                            <FileBadge filename={file.name} />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h3 className="text-sm font-semibold text-slate-900">{file.name}</h3>
+                                <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 ring-1 ring-slate-200">
+                                  {file.category.replace(/_/g, ' ')}
+                                </span>
+                              </div>
+                              <p className="mt-2 break-all text-xs leading-5 text-slate-700">{file.path}</p>
+
+                              <div className="mt-3 text-xs text-slate-600">
+                                <span className="font-semibold">Reason:</span> {file.reason}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </SectionCard>
+                  ) : (
+                <div />
+              )}
+
+        </section>
+          </>
           ) : !isScanning ? (
             <section className="rounded-[2rem] border border-slate-200 bg-white p-10 shadow-sm">
               <div className="max-w-2xl">
