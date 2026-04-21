@@ -431,7 +431,11 @@ function App() {
   const canUndoHistoryEntry = (entry: ActionHistoryEntry) => {
     if (
       entry.status !== 'success' ||
-      (entry.action !== 'move_to_review' && entry.action !== 'move_to_archive') ||
+      (
+        entry.action !== 'move_to_review' &&
+        entry.action !== 'move_to_archive' &&
+        entry.action !== 'move_to_trash'
+      ) ||
       !entry.source_path ||
       !entry.destination_path
     ) {
@@ -440,8 +444,11 @@ function App() {
 
     const alreadyRestored = actionHistory.some((historyEntry) => {
       return (
-        (historyEntry.action === 'restore_from_review' ||
-          historyEntry.action === 'restore_from_archive') &&
+        (
+          historyEntry.action === 'restore_from_review' ||
+          historyEntry.action === 'restore_from_archive' ||
+          historyEntry.action === 'restore_from_trash'
+        ) &&
         historyEntry.status === 'success' &&
         historyEntry.reverts_history_id === entry.id
       );
@@ -459,7 +466,8 @@ function App() {
       return actionHistory.filter(
         (entry) =>
           entry.action === 'restore_from_review' ||
-          entry.action === 'restore_from_archive'
+          entry.action === 'restore_from_archive' ||
+          entry.action === 'restore_from_trash'
       );
     }
 
@@ -1374,7 +1382,9 @@ function App() {
                         ? 'Moved to Trash'
                         : entry.action === 'restore_from_review'
                         ? 'Restored from Review'
-                        : 'Restored from Archive';
+                        : entry.action === 'restore_from_archive'
+                        ? 'Restored from Archive'
+                        : 'Restored from Trash';
 
                       return (
                         <div
@@ -1424,7 +1434,11 @@ function App() {
                           ) : null}
 
                           {!canUndoHistoryEntry(entry) &&
-                          (entry.action === 'move_to_review' || entry.action === 'move_to_archive') ? (
+                          (
+                            entry.action === 'move_to_review' ||
+                            entry.action === 'move_to_archive' ||
+                            entry.action === 'move_to_trash'
+                          ) ? (
                             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-500 ring-1 ring-slate-200">
                               already restored
                             </span>

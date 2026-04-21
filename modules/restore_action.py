@@ -12,11 +12,11 @@ def restore_from_history(entry: dict) -> dict:
     destination_path = entry.get("destination_path")
     mode = entry.get("mode", "single")
 
-    if action not in {"move_to_review", "move_to_archive"}:
+    if action not in {"move_to_review", "move_to_archive", "move_to_trash"}:
         return {
             "success": False,
             "action": "restore",
-            "message": "Undo is only supported for review and archive actions."
+            "message": "Undo is only supported for review, archive, and trash actions."
         }
 
     if not source_path or not destination_path:
@@ -63,11 +63,12 @@ def restore_from_history(entry: dict) -> dict:
 
     shutil.move(str(current_location), str(restore_target))
 
-    restore_action_name = (
-        "restore_from_review"
-        if action == "move_to_review"
-        else "restore_from_archive"
-    )
+    if action == "move_to_review":
+        restore_action_name = "restore_from_review"
+    elif action == "move_to_archive":
+        restore_action_name = "restore_from_archive"
+    else:
+        restore_action_name = "restore_from_trash"
 
     timestamp = datetime.now(timezone.utc).isoformat()
 

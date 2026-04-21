@@ -15,7 +15,8 @@ type ActionHistoryEntry = {
     | 'move_to_archive'
     | 'move_to_trash'
     | 'restore_from_review'
-    | 'restore_from_archive';
+    | 'restore_from_archive'
+    | 'restore_from_trash';
   source_path: string;
   destination_path: string | null;
   status: 'success';
