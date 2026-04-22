@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import Header from './components/Header';
 import ScanButton from './components/ScanButton';
 import InfoPanel from './components/InfoPanel';
+import QueueFileCard from './components/QueueFileCard';
+import FileBadge from './components/FileBadge';
 
 type ScanPreset = 'test' | 'desktop' | 'downloads' | 'documents' | 'custom';
 
@@ -228,15 +230,6 @@ function QueueSortControls({
   );
 }
 
-function FileBadge({ filename }: { filename: string }) {
-  const ext = filename.includes('.') ? filename.split('.').pop()?.toUpperCase() : 'FILE';
-
-  return (
-    <div className="inline-flex h-10 min-w-[2.75rem] items-center justify-center rounded-2xl bg-slate-100 px-3 text-xs font-semibold text-slate-600">
-      {ext || 'FILE'}
-    </div>
-  );
-}
 
 const confidenceRank: Record<'high' | 'medium' | 'low', number> = {
   low: 0,
@@ -1092,10 +1085,20 @@ function App() {
 
   return (
     <div className="min-h-screen bg-[#f7f7f2] text-slate-900">
+      <button
+        onClick={() => setIsSupportOpen(prev => !prev)}
+        className="fixed left-4 top-10 z-40 flex h-18 w-18 items-center justify-center rounded-xl bg-white shadow-md border border-slate-200 hover:bg-slate-100 transition"
+      >
+        <div className="space-y-2">
+          <div className="h-[1.5px] w-8 bg-slate-700" />
+          <div className="h-[1.5px] w-8 bg-slate-700" />
+          <div className="h-[1.5px] w-8 bg-slate-700" />
+        </div>
+      </button>
+
       <div className="mx-auto flex min-h-screen w-full max-w-[1700px] flex-col px-5 py-6 md:px-8 lg:px-10">
       <Header
         isScanning={isScanning}
-        toggleSupport={() => setIsSupportOpen((prev) => !prev)}
       />
         <main className="mt-8 space-y-8">
         {isSupportOpen && (
@@ -1113,14 +1116,6 @@ function App() {
                   <div className="text-sm font-semibold text-slate-900">
                     Workspace Support
                   </div>
-
-                  <button
-                    onClick={() => setIsSupportOpen(false)}
-                    className="text-slate-500 transition hover:text-slate-900"
-                    aria-label="Close support panel"
-                  >
-                    ✕
-                  </button>
                 </div>
                   {/* LEFT SUPPORT RAIL */}
                   <SectionCard
@@ -1764,50 +1759,15 @@ function App() {
                       ) : (
                         <div className="space-y-3">
                           {visibleReviewFiles.map((file) => (
-                            <div
+                            <QueueFileCard
                               key={file.path}
-                              className="flex items-start gap-4 rounded-3xl border border-amber-200 bg-amber-50 p-4"
-                            >
-                              <FileBadge filename={file.name} />
-                              <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <h3 className="text-sm font-semibold text-amber-950">{file.name}</h3>
-                                  <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200">
-                                    {file.category.replace(/_/g, ' ')}
-                                  </span>
-                                </div>
-                            
-                                <p className="mt-2 break-all text-xs leading-5 text-amber-900/80">
-                                  {file.path}
-                                </p>
-                            
-                                <div className="mt-3 rounded-2xl bg-white/60 px-3 py-3 space-y-2">
-                                  <div className="text-xs text-amber-900/80">
-                                    <span className="font-semibold">Reason:</span> {file.reason}
-                                  </div>
-                                  <div className="text-xs text-amber-900/70">
-                                    <span className="font-semibold">Confidence:</span> {file.confidence}
-                                  </div>
-                                  <div className="text-xs text-amber-900/70">
-                                    <span className="font-semibold">Recommended action:</span> {file.recommended_action}
-                                  </div>
-                                </div>
-                            
-                                <div className="mt-4 flex flex-wrap gap-3">
-                                  <button
-                                    onClick={() => handleMoveToReview(file.path)}
-                                    disabled={busyPath === file.path || isBulkActing}
-                                    className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
-                                      busyPath === file.path
-                                        ? 'cursor-not-allowed bg-slate-200 text-slate-500'
-                                        : 'bg-slate-900 text-white hover:bg-slate-700'
-                                    }`}
-                                  >
-                                    {busyPath === file.path ? 'Moving…' : 'Move to Review'}
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
+                              file={file}
+                              tone="review"
+                              actionLabel="Move to Review"
+                              busyLabel="Moving…"
+                              onAction={handleMoveToReview}
+                              isBusy={busyPath === file.path || isBulkActing}
+                            />
                           ))}
 
                           {sortedReviewFiles.length > 8 ? (
@@ -1884,50 +1844,15 @@ function App() {
                       ) : (
                         <div className="space-y-3">
                           {visibleArchiveCandidates.map((file) => (
-                            <div
+                            <QueueFileCard
                               key={file.path}
-                              className="flex items-start gap-4 rounded-3xl border border-sky-200 bg-sky-50 p-4"
-                            >
-                              <FileBadge filename={file.name} />
-                              <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <h3 className="text-sm font-semibold text-sky-950">{file.name}</h3>
-                                  <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-sky-800 ring-1 ring-sky-200">
-                                    {file.category.replace(/_/g, ' ')}
-                                  </span>
-                                </div>
-                            
-                                <p className="mt-2 break-all text-xs leading-5 text-sky-900/80">
-                                  {file.path}
-                                </p>
-                            
-                                <div className="mt-3 rounded-2xl bg-white/60 px-3 py-3 space-y-2">
-                                  <div className="text-xs text-sky-900/80">
-                                    <span className="font-semibold">Reason:</span> {file.reason}
-                                  </div>
-                                  <div className="text-xs text-sky-900/70">
-                                    <span className="font-semibold">Confidence:</span> {file.confidence}
-                                  </div>
-                                  <div className="text-xs text-sky-900/70">
-                                    <span className="font-semibold">Recommended action:</span> {file.recommended_action}
-                                  </div>
-                                </div>
-                            
-                                <div className="mt-4 flex flex-wrap gap-3">
-                                  <button
-                                    onClick={() => handleMoveToArchive(file.path)}
-                                    disabled={busyPath === file.path || isBulkActing}
-                                    className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
-                                      busyPath === file.path
-                                        ? 'cursor-not-allowed bg-slate-200 text-slate-500'
-                                        : 'bg-sky-900 text-white hover:bg-sky-700'
-                                    }`}
-                                  >
-                                    {busyPath === file.path ? 'Archiving…' : 'Move to Archive'}
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
+                              file={file}
+                              tone="archive"
+                              actionLabel="Move to Archive"
+                              busyLabel="Archiving…"
+                              onAction={handleMoveToArchive}
+                              isBusy={busyPath === file.path || isBulkActing}
+                            />
                           ))}
 
                           {sortedArchiveCandidates.length > 8 ? (
@@ -2004,50 +1929,15 @@ function App() {
                       ) : (
                         <div className="space-y-3">
                           {visibleRemoveCandidates.map((file) => (
-                            <div
+                            <QueueFileCard
                               key={file.path}
-                              className="flex items-start gap-4 rounded-3xl border border-rose-200 bg-rose-50 p-4"
-                            >
-                              <FileBadge filename={file.name} />
-                              <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <h3 className="text-sm font-semibold text-rose-950">{file.name}</h3>
-                                  <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-rose-800 ring-1 ring-rose-200">
-                                    {file.category.replace(/_/g, ' ')}
-                                  </span>
-                                </div>
-                            
-                                <p className="mt-2 break-all text-xs leading-5 text-rose-900/80">
-                                  {file.path}
-                                </p>
-                            
-                                <div className="mt-3 rounded-2xl bg-white/60 px-3 py-3 space-y-2">
-                                  <div className="text-xs text-rose-900/80">
-                                    <span className="font-semibold">Reason:</span> {file.reason}
-                                  </div>
-                                  <div className="text-xs text-rose-900/70">
-                                    <span className="font-semibold">Confidence:</span> {file.confidence}
-                                  </div>
-                                  <div className="text-xs text-rose-900/70">
-                                    <span className="font-semibold">Recommended action:</span> {file.recommended_action}
-                                  </div>
-                                </div>
-                            
-                                <div className="mt-4 flex flex-wrap gap-3">
-                                  <button
-                                    onClick={() => handleMoveToTrash(file.path)}
-                                    disabled={busyPath === file.path || isBulkActing}
-                                    className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
-                                      busyPath === file.path
-                                        ? 'cursor-not-allowed bg-slate-200 text-slate-500'
-                                        : 'bg-rose-900 text-white hover:bg-rose-700'
-                                    }`}
-                                  >
-                                    {busyPath === file.path ? 'Removing…' : 'Move to Trash'}
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
+                              file={file}
+                              tone="remove"
+                              actionLabel="Move to Trash"
+                              busyLabel="Removing…"
+                              onAction={handleMoveToTrash}
+                              isBusy={busyPath === file.path || isBulkActing}
+                            />
                           ))}
 
                           {sortedRemoveCandidates.length > 8 ? (

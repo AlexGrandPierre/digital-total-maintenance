@@ -2,26 +2,13 @@ import logo from '../assets/dtm-logo.png';
 
 export default function Header({
   isScanning,
-  toggleSupport,
 }: {
   isScanning: boolean;
-  toggleSupport: () => void;
 }) {
   return (
     <header className="rounded-[2rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={toggleSupport}
-            className="flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 text-slate-700 transition hover:bg-slate-200"
-            aria-label="Open support panel"
-          >
-            <div className="space-y-1">
-              <div className="h-[2px] w-5 bg-slate-700" />
-              <div className="h-[2px] w-5 bg-slate-700" />
-              <div className="h-[2px] w-5 bg-slate-700" />
-            </div>
-          </button>
+        <div className="flex items-center gap-5">
 
           <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-slate-50 ring-1 ring-slate-200">
             <img
