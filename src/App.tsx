@@ -4,86 +4,15 @@ import ScanButton from './components/ScanButton';
 import InfoPanel from './components/InfoPanel';
 import QueueFileCard from './components/QueueFileCard';
 import FileBadge from './components/FileBadge';
-
-type ScanPreset = 'test' | 'desktop' | 'downloads' | 'documents' | 'custom';
-
-type SortKey = 'name' | 'age_days' | 'size' | 'confidence';
-type SortDirection = 'asc' | 'desc';
-
-type ClassifiedFile = {
-  path: string;
-  name: string;
-  ext: string;
-  size: number;
-  age_days: number;
-  hash: string | null;
-  category: string;
-  confidence: 'high' | 'medium' | 'low';
-  recommended_action: 'keep' | 'ignore' | 'review' | 'archive' | 'remove';
-  reason: string;
-  ui_visibility: 'normal' | 'hidden_by_default';
-};
-
-type DuplicateGroupItem = {
-  path: string;
-  name: string;
-  ext: string;
-  size: number;
-  age_days: number;
-  category: string;
-  confidence: 'high' | 'medium' | 'low';
-  recommended_action: 'keep' | 'ignore' | 'review' | 'archive' | 'remove';
-  reason: string;
-  ui_visibility: 'normal' | 'hidden_by_default';
-};
-
-type DuplicateGroup = {
-  group_id: string;
-  confidence: 'high' | 'medium';
-  reason: string;
-  normalized_name: string;
-  items: DuplicateGroupItem[];
-};
-
-type ScanResult = {
-  scanned_at: string;
-  folder: string;
-  mode: string;
-  scan_warnings: string[];
-  total_files: number;
-
-  review_files: ClassifiedFile[];
-  review_total: number;
-
-  system_files: ClassifiedFile[];
-  system_total: number;
-
-  archive_candidates: ClassifiedFile[];
-  archive_total: number;
-
-  remove_candidates: ClassifiedFile[];
-  remove_total: number;
-
-  duplicates: DuplicateGroup[];
-  duplicates_total: number;
-
-  age_buckets: Record<string, number>;
-  by_ext: Record<string, number>;
-
-  errors: Array<{ path: string; error: string }>;
-  errors_total: number;
-
-  excluded_dirs_count: number;
-
-  detail_caps: {
-    review_files: number;
-    system_files: number;
-    archive_candidates: number;
-    remove_candidates: number;
-    duplicates: number;
-    errors: number;
-  };
-};
+import type {
+  ScanPreset,
+  SortKey,
+  SortDirection,
+  ClassifiedFile,
+  DuplicateGroup,
+  DuplicateGroupItem,
+  ScanResult,
+} from './types/dtm';
 
 function StatCard({
   label,
@@ -546,33 +475,39 @@ function App() {
   ) => {
     setScanData((prev) => {
       if (!prev) return prev;
-  
+
+      const updatedGroups = prev.duplicates
+        .map((group) => ({
+          ...group,
+          items: group.items.filter((item) => item.path !== filePath),
+        }))
+        .filter((group) => group.items.length >= 2);
+
       const next = {
         ...prev,
         review_files: prev.review_files.filter((f) => f.path !== filePath),
         archive_candidates: prev.archive_candidates.filter((f) => f.path !== filePath),
         remove_candidates: prev.remove_candidates.filter((f) => f.path !== filePath),
         system_files: prev.system_files.filter((f) => f.path !== filePath),
-        duplicates: prev.duplicates.filter(
-          (pair) => pair[0] !== filePath && pair[1] !== filePath
-        ),
+        duplicates: updatedGroups,
+        duplicates_total: updatedGroups.length,
         review_total: prev.review_total,
         archive_total: prev.archive_total,
         remove_total: prev.remove_total,
       };
-  
+
       if (actionType === 'review') {
         next.review_total = Math.max(0, prev.review_total - 1);
       }
-  
+
       if (actionType === 'archive') {
         next.archive_total = Math.max(0, prev.archive_total - 1);
       }
-  
+
       if (actionType === 'remove') {
         next.remove_total = Math.max(0, prev.remove_total - 1);
       }
-  
+
       return next;
     });
   };
@@ -716,34 +651,30 @@ function App() {
   };
 
   const handleArchiveDuplicate = async (duplicatePath: string) => {
-    if (busyDuplicateGroupId) return;
-    
+    if (busyDuplicateGroupId || isBulkActing || isScanning) return;
+
     setBusyPath(duplicatePath);
     setActionStatus(null);
-  
+
     try {
-      const result = await window.electronAPI?.moveToArchive?.(duplicatePath, 'single');
-  
-      if (result?.success) {
+      const result = await performQueueAction('archive', duplicatePath, {
+        rescanAfterSuccess: false,
+        mode: 'single',
+      });
+
+      if (result.success) {
+        removeDuplicateFromQueue(duplicatePath);
+        await loadActionHistory();
+        setNeedsRescan(true);
+
         setActionStatus({
           tone: 'success',
-          message: result.destination
-            ? `Duplicate moved to DTM Archive: ${result.destination}`
-            : result.message,
-        });
-  
-        removeDuplicateFromQueue(duplicatePath);
-
-        await loadActionHistory();
-  
-        window.electronAPI?.sendScanRequest?.({
-          preset: scanPreset,
-          customPath: customPath.trim(),
+          message: `${result.message} Refresh scan when you want to reconcile duplicate groups.`,
         });
       } else {
         setActionStatus({
           tone: 'error',
-          message: result?.message || 'Failed to archive duplicate.',
+          message: result.message,
         });
       }
     } catch (error) {
@@ -1763,7 +1694,7 @@ function App() {
                               key={file.path}
                               file={file}
                               tone="review"
-                              actionLabel="Move to Review"
+                              actionLabel="Move to Review Folder"
                               busyLabel="Moving…"
                               onAction={handleMoveToReview}
                               isBusy={busyPath === file.path || isBulkActing}
@@ -1848,7 +1779,7 @@ function App() {
                               key={file.path}
                               file={file}
                               tone="archive"
-                              actionLabel="Move to Archive"
+                              actionLabel="Move to Archive Folder"
                               busyLabel="Archiving…"
                               onAction={handleMoveToArchive}
                               isBusy={busyPath === file.path || isBulkActing}
@@ -2103,7 +2034,12 @@ function App() {
                                           {!isSelectedPrimary ? (
                                             <button
                                               onClick={() => handleArchiveDuplicate(item.path)}
-                                              disabled={busyPath === item.path || busyDuplicateGroupId === group.group_id || isBulkActing}
+                                              disabled={
+                                                busyPath === item.path ||
+                                                busyDuplicateGroupId === group.group_id ||
+                                                isBulkActing ||
+                                                isScanning
+                                              }
                                               className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
                                                 busyPath === item.path
                                                   ? 'cursor-not-allowed bg-slate-200 text-slate-500'
