@@ -81,6 +81,36 @@ function KeyValueList({
   );
 }
 
+function InsightList({
+  entries,
+  emptyMessage,
+}: {
+  entries: Array<{ label: string; count: number }>;
+  emptyMessage: string;
+}) {
+  if (!entries || entries.length === 0) {
+    return <p className="text-sm text-slate-500">{emptyMessage}</p>;
+  }
+
+  return (
+    <div className="space-y-3">
+      {entries.map((entry) => (
+        <div
+          key={entry.label}
+          className="flex items-center justify-between rounded-2xl bg-slate-50 px-4 py-3"
+        >
+          <span className="text-sm font-medium text-slate-700">
+            {entry.label.replace(/_/g, ' ')}
+          </span>
+          <span className="text-sm font-semibold text-slate-900">
+            {entry.count.toLocaleString()}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ModePill({
   active,
   label,
@@ -138,6 +168,7 @@ function QueueSortControls({
           <option value="age_days">Age</option>
           <option value="size">Size</option>
           <option value="name">Name</option>
+          <option value="review_priority">Review priority</option>
         </select>
       </div>
 
@@ -166,6 +197,12 @@ const confidenceRank: Record<'high' | 'medium' | 'low', number> = {
   high: 2,
 };
 
+const reviewPriorityRank: Record<'high' | 'medium' | 'low', number> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+};
+
 function compareValues(
   a: ClassifiedFile,
   b: ClassifiedFile,
@@ -176,6 +213,10 @@ function compareValues(
 
   if (key === 'confidence') {
     result = confidenceRank[a.confidence] - confidenceRank[b.confidence];
+  } else if (key === 'review_priority') {
+    const aPriority = a.review_priority ? reviewPriorityRank[a.review_priority] : -1;
+    const bPriority = b.review_priority ? reviewPriorityRank[b.review_priority] : -1;
+    result = aPriority - bPriority;
   } else if (key === 'name') {
     result = a.name.localeCompare(b.name);
   } else if (key === 'age_days') {
@@ -229,8 +270,8 @@ function App() {
     currentFileName: string;
   } | null>(null);
 
-  const [reviewSortKey, setReviewSortKey] = useState<SortKey>('confidence');
-  const [reviewSortDirection, setReviewSortDirection] = useState<SortDirection>('asc');
+  const [reviewSortKey, setReviewSortKey] = useState<SortKey>('review_priority');
+  const [reviewSortDirection, setReviewSortDirection] = useState<SortDirection>('desc');
 
   const [archiveSortKey, setArchiveSortKey] = useState<SortKey>('age_days');
   const [archiveSortDirection, setArchiveSortDirection] = useState<SortDirection>('desc');
@@ -350,6 +391,28 @@ function App() {
     if (!scanData) return [];
     return sortQueue(scanData.remove_candidates, removeSortKey, removeSortDirection);
   }, [scanData, removeSortKey, removeSortDirection]);
+
+  const reviewPrioritySummary = useMemo(() => {
+    if (!scanData) return [];
+
+    const counts = {
+      high: 0,
+      medium: 0,
+      low: 0,
+    };
+
+    for (const file of scanData.review_files) {
+      if (file.review_priority === 'high') counts.high += 1;
+      else if (file.review_priority === 'medium') counts.medium += 1;
+      else if (file.review_priority === 'low') counts.low += 1;
+    }
+
+    return [
+      ['High priority', counts.high],
+      ['Medium priority', counts.medium],
+      ['Low priority', counts.low],
+    ] as Array<[string, number]>;
+  }, [scanData]);
 
   const handleBrowseForFolder = async () => {
     try {
@@ -1002,8 +1065,8 @@ function App() {
     }
   };
 
-  const handleBulkMoveToReview = async () => {
-    await handleBulkQueueAction('review', visibleReviewFiles);
+  const handleBulkArchiveFromReview = async () => {
+    await handleBulkQueueAction('archive', visibleReviewFiles);
   };
 
   const handleBulkMoveToArchive = async () => {
@@ -1012,6 +1075,17 @@ function App() {
 
   const handleBulkMoveToTrash = async () => {
     await handleBulkQueueAction('remove', visibleRemoveCandidates);
+  };
+
+  const handleKeepFile = async (filePath: string) => {
+    removePathFromQueues(filePath, 'review');
+  
+    setActionStatus({
+      tone: 'success',
+      message: 'Kept file in place. Refresh scan when you want to reconcile results.',
+    });
+  
+    setNeedsRescan(true);
   };
 
   return (
@@ -1049,6 +1123,31 @@ function App() {
                   </div>
                 </div>
                   {/* LEFT SUPPORT RAIL */}
+                  {insights && (
+                    <SectionCard
+                      title="DTM Insights"
+                      subtitle="High-level interpretation of your current digital environment."
+                    >
+                      <div className="space-y-3 text-sm text-slate-700">
+                        <p className="font-medium text-slate-900">{insights.summary}</p>
+
+                        <ul className="space-y-1">
+                          <li>• {insights.review} files need review</li>
+                          <li>• {insights.archive} files can likely be archived</li>
+                          <li>• {insights.remove} files appear safe to remove</li>
+                        </ul>
+
+                        <p>
+                          Most files have not been modified in over 180 days: {insights.oldFiles}
+                        </p>
+
+                        <p className="text-slate-600">
+                          Recommendation: Start by reviewing unknown files, then archive older compressed files.
+                        </p>
+                      </div>
+                    </SectionCard>
+                  )}
+
                   <SectionCard
                     title="Recent Actions"
                     subtitle="A local record of successful maintenance actions performed by DTM."
@@ -1187,6 +1286,45 @@ function App() {
                     )}
                   </SectionCard>
 
+                  {scanData && (
+                    <SectionCard
+                      title="Scan Summary"
+                      subtitle="current Scan scope and bounded result coverage"
+                    >
+                      <section className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4 shadow-sm">
+                      <div className="space-y-2 text-sm text-slate-700">
+                        <div>
+                          <span className="font-semibold">Scan mode:</span> {scanData.mode}
+                        </div>
+                        <div>
+                          <span className="font-semibold">Detailed review items shown:</span>{' '}
+                          {scanData.review_files.length} of {scanData.review_total}
+                        </div>
+                        <div>
+                          <span className="font-semibold">Detailed archive items shown:</span>{' '}
+                          {scanData.archive_candidates.length} of {scanData.archive_total}
+                        </div>
+                        <div>
+                          <span className="font-semibold">Detailed remove items shown:</span>{' '}
+                          {scanData.remove_candidates.length} of {scanData.remove_total}
+                        </div>
+                        <div>
+                          <span className="font-semibold">Excluded directories:</span>{' '}
+                          {scanData.excluded_dirs_count}
+                        </div>
+
+                        {scanData.scan_warnings?.length > 0 ? (
+                          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
+                            {scanData.scan_warnings.map((warning, index) => (
+                              <div key={index}>⚠️ {warning}</div>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    </section>
+                    </SectionCard>
+                  )}
+
                   <SectionCard
                     title="Action Insights"
                     subtitle="What each queue means and how DTM thinks about file decisions."
@@ -1247,70 +1385,6 @@ function App() {
                       </InfoPanel>
                     </div>
                   </SectionCard>
-
-                  {insights && (
-                    <SectionCard
-                      title="DTM Insights"
-                      subtitle="High-level interpretation of your current digital environment."
-                    >
-                      <div className="space-y-3 text-sm text-slate-700">
-                        <p className="font-medium text-slate-900">{insights.summary}</p>
-
-                        <ul className="space-y-1">
-                          <li>• {insights.review} files need review</li>
-                          <li>• {insights.archive} files can likely be archived</li>
-                          <li>• {insights.remove} files appear safe to remove</li>
-                        </ul>
-
-                        <p>
-                          Most files have not been modified in over 180 days: {insights.oldFiles}
-                        </p>
-
-                        <p className="text-slate-600">
-                          Recommendation: Start by reviewing unknown files, then archive older compressed files.
-                        </p>
-                      </div>
-                    </SectionCard>
-                  )}
-
-                  {scanData && (
-                    <SectionCard
-                      title="Scan Summary"
-                      subtitle="current Scan scope and bounded result coverage"
-                    >
-                      <section className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4 shadow-sm">
-                      <div className="space-y-2 text-sm text-slate-700">
-                        <div>
-                          <span className="font-semibold">Scan mode:</span> {scanData.mode}
-                        </div>
-                        <div>
-                          <span className="font-semibold">Detailed review items shown:</span>{' '}
-                          {scanData.review_files.length} of {scanData.review_total}
-                        </div>
-                        <div>
-                          <span className="font-semibold">Detailed archive items shown:</span>{' '}
-                          {scanData.archive_candidates.length} of {scanData.archive_total}
-                        </div>
-                        <div>
-                          <span className="font-semibold">Detailed remove items shown:</span>{' '}
-                          {scanData.remove_candidates.length} of {scanData.remove_total}
-                        </div>
-                        <div>
-                          <span className="font-semibold">Excluded directories:</span>{' '}
-                          {scanData.excluded_dirs_count}
-                        </div>
-
-                        {scanData.scan_warnings?.length > 0 ? (
-                          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
-                            {scanData.scan_warnings.map((warning, index) => (
-                              <div key={index}>⚠️ {warning}</div>
-                            ))}
-                          </div>
-                        ) : null}
-                      </div>
-                    </section>
-                    </SectionCard>
-                  )}
               </div>
             </div>
           </>
@@ -1603,13 +1677,13 @@ function App() {
                   tone={scanData.duplicates.length > 0 ? 'warn' : 'good'}
                 />
                 <StatCard
-                  label="Errors"
+                  label="Inspection issues"
                   value={scanData.errors_total}
-                  tone={scanData.errors.length > 0 ? 'danger' : 'good'}
+                  tone={scanData.errors_total > 0 ? 'danger' : 'good'}
                 />
               </section>
 
-              <section className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+              <section className="grid grid-cols-1 gap-6 xl:grid-cols-4">
                 <SectionCard
                   title="Age Buckets"
                   subtitle="How recently files in the scan target were modified."
@@ -1631,14 +1705,70 @@ function App() {
                 </SectionCard>
 
                 <SectionCard
-                  title="Review Queue"
-                  subtitle="Quick summary of what this scan says needs attention."
+                  title="Queue Summary"
+                  subtitle="A high-level map of the decisions DTM found in this scan."
                 >
-                  <KeyValueList
-                    entries={reviewSummary}
-                    emptyMessage="No review data available yet."
+                  <InsightList
+                    entries={scanData.scan_insights?.queue_summary || []}
+                    emptyMessage="No queue summary available yet."
                   />
                 </SectionCard>
+
+                <SectionCard
+                  title="What DTM Is Seeing"
+                  subtitle="The most common patterns behind the current decision queues."
+                >
+                  <div className="space-y-5">
+                    <div>
+                      <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                        Needs Decision Contexts
+                      </div>
+                      <InsightList
+                        entries={scanData.scan_insights?.review_context_summary || []}
+                        emptyMessage="No decision-context patterns available."
+                      />
+                    </div>
+
+                    <div>
+                      <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                        Top Decision Reasons
+                      </div>
+                      <InsightList
+                        entries={scanData.scan_insights?.top_review_reasons || []}
+                        emptyMessage="No decision reasons available."
+                      />
+                    </div>
+                  </div>
+                </SectionCard>
+
+                {scanData.errors.length > 0 && (
+                  <div className="mt-6">
+                    <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400 mb-2">
+                      Sample issues (first {Math.min(10, scanData.errors.length)})
+                    </div>
+
+                    <div className="space-y-2 max-h-60 overflow-y-auto">
+                      {scanData.errors.slice(0, 10).map((err, i) => (
+                        <div
+                          key={i}
+                          className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs"
+                        >
+                          <div className="font-medium text-slate-800">
+                            {err.error_type}
+                          </div>
+
+                          <div className="text-slate-500 break-all mt-1">
+                            {err.path}
+                          </div>
+
+                          <div className="text-slate-400 mt-1">
+                            {err.raw_error || err.error}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </section>
 
               <section className="space-y-6">
@@ -1646,19 +1776,19 @@ function App() {
                   {/* MAIN WORKSPACE */}
                   <section className="grid grid-cols-1 gap-6 xl:grid-cols-2"> 
                     <SectionCard
-                      title="Needs Review"
-                      subtitle="Files that need human judgment before DTM can confidently relocate or remove them."
+                      title="Needs Decision"
+                      subtitle="Files that require a decision: keep, archive, or remove."
                     >
                       {sortedReviewFiles.length > 0 ? (
                         <div className="mb-3 text-xs text-slate-500">
-                          Showing {visibleReviewFiles.length} of {scanData.review_total} review items
+                          Showing top {visibleReviewFiles.length} prioritized decision items from {scanData.review_total} total
                         </div>
                       ) : null}
 
                       {visibleReviewFiles.length > 0 ? (
                         <div className="mb-4 flex flex-wrap gap-3">
                           <button
-                            onClick={handleBulkMoveToReview}
+                            onClick={handleBulkArchiveFromReview}
                             disabled={
                               isBulkActing ||
                               isScanning ||
@@ -1668,7 +1798,7 @@ function App() {
                           >
                             {isBulkActing && bulkProgress?.action === 'review'
                               ? 'Bulk moving…'
-                              : `Move visible ${visibleReviewFiles.length} to Review`}
+                              : `Archive visible ${visibleReviewFiles.length}`}
                           </button>
                         </div>
                       ) : null}
@@ -1694,9 +1824,12 @@ function App() {
                               key={file.path}
                               file={file}
                               tone="review"
-                              actionLabel="Move to Review Folder"
-                              busyLabel="Moving…"
-                              onAction={handleMoveToReview}
+                              actionLabel="Archive"
+                              busyLabel="Archiving…"
+                              onAction={handleMoveToArchive}
+                              onKeep={handleKeepFile}
+                              onRemove={handleMoveToTrash}
+                              recommendedAction="archive"
                               isBusy={busyPath === file.path || isBulkActing}
                             />
                           ))}
@@ -1732,11 +1865,11 @@ function App() {
 
                     <SectionCard
                       title="Archive Candidates"
-                      subtitle="Files that are likely worth keeping, but not keeping in your active workspace."
+                      subtitle="Ranked files that appear worth keeping, but not keeping active in the current workspace."
                     >
                       {sortedArchiveCandidates.length > 0 ? ( 
                         <div className="mb-3 text-xs text-slate-500">
-                          Showing {visibleArchiveCandidates.length} of {scanData.archive_total} archive candidates
+                          Showing top {visibleArchiveCandidates.length} ranked archive candidates from {scanData.archive_total} total
                         </div>
                       ) : null}
                       
@@ -1779,9 +1912,12 @@ function App() {
                               key={file.path}
                               file={file}
                               tone="archive"
-                              actionLabel="Move to Archive Folder"
+                              actionLabel="Move to Archive"
                               busyLabel="Archiving…"
                               onAction={handleMoveToArchive}
+                              onKeep={handleKeepFile}
+                              onRemove={handleMoveToTrash}
+                              recommendedAction="archive"
                               isBusy={busyPath === file.path || isBulkActing}
                             />
                           ))}
@@ -1817,11 +1953,11 @@ function App() {
 
                     <SectionCard
                       title="Remove Candidates"
-                      subtitle="Files that appear disposable, temporary, or low-value based on current rules."
+                      subtitle="Ranked files that appear disposable, temporary, or low-value. DTM moves these to Trash, not permanent deletion."
                     >
                       {sortedRemoveCandidates.length > 0 ? (
                         <div className="mb-3 text-xs text-slate-500">
-                          Showing {visibleRemoveCandidates.length} of {scanData.remove_total} remove candidates
+                          Showing top {visibleRemoveCandidates.length} ranked remove candidates from {scanData.remove_total} total
                         </div>
                       ) : null}
 
@@ -1867,6 +2003,9 @@ function App() {
                               actionLabel="Move to Trash"
                               busyLabel="Removing…"
                               onAction={handleMoveToTrash}
+                              onKeep={handleKeepFile}
+                              onArchive={handleMoveToArchive}
+                              recommendedAction="remove"
                               isBusy={busyPath === file.path || isBulkActing}
                             />
                           ))}
@@ -1930,7 +2069,7 @@ function App() {
                                       Duplicate Group {index + 1}
                                     </div>
                                     <div className="mt-1 text-xs text-slate-500">
-                                      {group.items.length} files · confidence: {group.confidence}
+                                      {group.items_total ?? group.items.length} files · showing {group.items.length} · confidence: {group.confidence}
                                     </div>
                                   </div>
 
@@ -1969,10 +2108,17 @@ function App() {
                                     >
                                       {busyDuplicateGroupId === group.group_id
                                         ? 'Resolving…'
-                                        : `Archive other copies (${Math.max(group.items.length - 1, 0)})`}
+                                        : `Archive shown copies (${Math.max(group.items.length - 1, 0)})`}
                                     </button>
                                   </div>
                                 </div>
+
+                                {group.hidden_items_count && group.hidden_items_count > 0 ? (
+                                  <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+                                    {group.hidden_items_count} additional duplicate copies are hidden in this bounded view.
+                                    DTM is showing a representative subset so one duplicate family does not dominate the workspace.
+                                  </div>
+                                ) : null}
 
                                 <div className="mt-4 space-y-3">
                                   {group.items.map((item, itemIndex) => {

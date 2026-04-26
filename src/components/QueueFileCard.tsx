@@ -17,6 +17,8 @@ const toneClasses = {
     label: 'text-amber-800/80',
     body: 'text-amber-950/90',
     toggle: 'bg-white text-amber-900 ring-1 ring-amber-200 hover:bg-amber-100/60',
+    infoLabel: 'text-amber-800/75',
+    infoValue: 'text-amber-950/90',
   },
   archive: {
     card: 'border-sky-200 bg-sky-50',
@@ -30,6 +32,8 @@ const toneClasses = {
     label: 'text-sky-800/80',
     body: 'text-sky-950/90',
     toggle: 'bg-white text-sky-900 ring-1 ring-sky-200 hover:bg-sky-100/60',
+    infoLabel: 'text-sky-800/75',
+    infoValue: 'text-sky-950/90',
   },
   remove: {
     card: 'border-rose-200 bg-rose-50',
@@ -43,11 +47,43 @@ const toneClasses = {
     label: 'text-rose-800/80',
     body: 'text-rose-950/90',
     toggle: 'bg-white text-rose-900 ring-1 ring-rose-200 hover:bg-rose-100/60',
+    infoLabel: 'text-rose-800/75',
+    infoValue: 'text-rose-950/90',
   },
 };
 
+const confidenceColor = {
+  high: "text-emerald-700",
+  medium: "text-amber-700",
+  low: "text-rose-700",
+};
+
+
 function humanizeToken(value: string) {
   return value.replace(/_/g, ' ');
+}
+
+function InfoRow({
+  label,
+  value,
+  labelClass,
+  valueClass,
+}: {
+  label: string;
+  value: string;
+  labelClass: string;
+  valueClass: string;
+}) {
+  return (
+    <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-2">
+      <span className={`text-[11px] font-semibold uppercase tracking-[0.14em] ${labelClass}`}>
+        {label}
+      </span>
+      <span className={`text-xs leading-5 ${valueClass}`}>
+        {value}
+      </span>
+    </div>
+  );
 }
 
 export default function QueueFileCard({
@@ -57,6 +93,10 @@ export default function QueueFileCard({
   busyLabel,
   onAction,
   isBusy,
+  onKeep,
+  onArchive,
+  onRemove,
+  recommendedAction,
 }: {
   file: ClassifiedFile;
   tone: QueueTone;
@@ -64,6 +104,10 @@ export default function QueueFileCard({
   busyLabel: string;
   onAction: (path: string) => void;
   isBusy: boolean;
+  onKeep?: (path: string) => void;
+  onArchive?: (path: string) => void;
+  onRemove?: (path: string) => void;
+  recommendedAction?: 'keep' | 'archive' | 'remove' | 'review' | 'ignore';
 }) {
   const styles = toneClasses[tone];
   const [showReasoning, setShowReasoning] = useState(false);
@@ -75,9 +119,11 @@ export default function QueueFileCard({
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <h3 className={`text-sm font-semibold ${styles.title}`}>{file.name}</h3>
+
           <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${styles.metaPill}`}>
             {humanizeToken(file.category)}
           </span>
+
           <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${styles.metaPill}`}>
             {humanizeToken(file.file_kind)}
           </span>
@@ -91,18 +137,41 @@ export default function QueueFileCard({
           <div className={`text-xs ${styles.reason}`}>
             <span className="font-semibold">Primary reason:</span> {file.reason}
           </div>
-        </div>
 
-        <div className="mt-3 flex flex-wrap gap-2">
-          <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${styles.metaPill}`}>
-            Confidence: {file.confidence}
-          </span>
-          <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${styles.metaPill}`}>
-            Recommendation: {file.recommended_action}
-          </span>
-          <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${styles.metaPill}`}>
-            Context: {humanizeToken(file.location_context)}
-          </span>
+          <div className="mt-3 space-y-2 border-t border-black/5 pt-3">
+            <InfoRow
+              label="Confidence"
+              value={file.confidence}
+              labelClass={styles.infoLabel}
+              valueClass={styles.infoValue}
+            />
+            <InfoRow
+              label="Recommendation"
+              value={humanizeToken(file.recommended_action)}
+              labelClass={styles.infoLabel}
+              valueClass={styles.infoValue}
+            />
+            <InfoRow
+              label="Context"
+              value={humanizeToken(file.location_context)}
+              labelClass={styles.infoLabel}
+              valueClass={styles.infoValue}
+            />
+            <InfoRow
+              label="Review priority"
+              value={file.review_priority ? file.review_priority : 'not applicable'}
+              labelClass={styles.infoLabel}
+              valueClass={styles.infoValue}
+            />
+            {file.action_confidence ? (
+              <InfoRow
+                label="Action confidence"
+                value={file.action_confidence}
+                labelClass={styles.infoLabel}
+                valueClass={`${styles.infoValue} ${confidenceColor[file.action_confidence]}`}
+              />
+            ) : null}
+          </div>
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -125,14 +194,47 @@ export default function QueueFileCard({
           >
             {isBusy ? busyLabel : actionLabel}
           </button>
+
+          {onKeep ? (
+            <button
+              type="button"
+              onClick={() => onKeep(file.path)}
+              disabled={isBusy}
+              className="rounded-full bg-white px-4 py-2 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+            >
+              Keep
+            </button>
+          ) : null}
+
+          {onArchive && recommendedAction !== 'archive' ? (
+            <button
+              type="button"
+              onClick={() => onArchive(file.path)}
+              disabled={isBusy}
+              className="rounded-full bg-white px-4 py-2 text-xs font-semibold text-sky-800 ring-1 ring-sky-200 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+            >
+              Archive
+            </button>
+          ) : null}
+
+          {onRemove && recommendedAction !== 'remove' ? (
+            <button
+              type="button"
+              onClick={() => onRemove(file.path)}
+              disabled={isBusy}
+              className="rounded-full bg-white px-4 py-2 text-xs font-semibold text-rose-800 ring-1 ring-rose-200 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+            >
+              Remove
+            </button>
+          ) : null}
         </div>
 
         {showReasoning ? (
           <div className={`mt-4 rounded-2xl border px-3 py-3 ${styles.subcard}`}>
-            <div className="space-y-3">
+            <div className="space-y-4">
               <div>
                 <div className={`text-[11px] font-semibold uppercase tracking-[0.16em] ${styles.label}`}>
-                  Known type
+                  What DTM thinks this is
                 </div>
                 <div className={`mt-1 text-xs leading-5 ${styles.body}`}>
                   {file.known_type_explanation}
@@ -141,38 +243,40 @@ export default function QueueFileCard({
 
               <div>
                 <div className={`text-[11px] font-semibold uppercase tracking-[0.16em] ${styles.label}`}>
-                  Why DTM classified it this way
+                  Why this file matters here
                 </div>
                 <div className={`mt-1 text-xs leading-5 ${styles.body}`}>
-                  {file.classification_reason}
+                  {file.context_reason}
                 </div>
               </div>
 
               <div>
                 <div className={`text-[11px] font-semibold uppercase tracking-[0.16em] ${styles.label}`}>
-                  Why this confidence
-                </div>
-                <div className={`mt-1 text-xs leading-5 ${styles.body}`}>
-                  {file.confidence_reason}
-                </div>
-              </div>
-
-              <div>
-                <div className={`text-[11px] font-semibold uppercase tracking-[0.16em] ${styles.label}`}>
-                  Why this recommendation
+                  Why DTM recommends this
                 </div>
                 <div className={`mt-1 text-xs leading-5 ${styles.body}`}>
                   {file.suggested_action_reason}
                 </div>
               </div>
 
+              {file.review_priority_reason ? (
+                <div>
+                  <div className={`text-[11px] font-semibold uppercase tracking-[0.16em] ${styles.label}`}>
+                    Why this priority
+                  </div>
+                  <div className={`mt-1 text-xs leading-5 ${styles.body}`}>
+                    {file.review_priority_reason}
+                  </div>
+                </div>
+              ) : null}
+
               {file.risk_flags.length > 0 ? (
                 <div>
                   <div className={`text-[11px] font-semibold uppercase tracking-[0.16em] ${styles.label}`}>
-                    Flags
+                    Caution flags
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {file.risk_flags.map((flag) => (
+                    {file.risk_flags.slice(0, 4).map((flag) => (
                       <span
                         key={flag}
                         className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${styles.metaPill}`}
