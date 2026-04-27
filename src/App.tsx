@@ -14,6 +14,19 @@ import type {
   ScanResult,
 } from './types/dtm';
 
+type QueueFilter = {
+  label: string;
+  key: 'context_type' | 'reason' | 'recommended_action' | 'file_kind' | 'user_relevance';
+  value: string;
+} | null;
+
+type BatchPreview = {
+  filter: QueueFilter;
+  action: 'archive' | 'remove' | 'keep';
+  items: ClassifiedFile[];
+  total: number;
+} | null;
+
 function StatCard({
   label,
   value,
@@ -84,9 +97,17 @@ function KeyValueList({
 function InsightList({
   entries,
   emptyMessage,
+  onSelect,
+  getActions,
+  activeFilter,
+  getMatchCount,
 }: {
   entries: Array<{ label: string; count: number }>;
   emptyMessage: string;
+  onSelect?: (entry: { label: string; count: number }) => void;
+  getActions?: (entry: { label: string; count: number }) => React.ReactNode;
+  activeFilter?: QueueFilter;
+  getMatchCount?: (entry: { label: string; count: number }) => number;
 }) {
   if (!entries || entries.length === 0) {
     return <p className="text-sm text-slate-500">{emptyMessage}</p>;
@@ -94,19 +115,53 @@ function InsightList({
 
   return (
     <div className="space-y-3">
-      {entries.map((entry) => (
-        <div
-          key={entry.label}
-          className="flex items-center justify-between rounded-2xl bg-slate-50 px-4 py-3"
-        >
-          <span className="text-sm font-medium text-slate-700">
-            {entry.label.replace(/_/g, ' ')}
-          </span>
-          <span className="text-sm font-semibold text-slate-900">
-            {entry.count.toLocaleString()}
-          </span>
-        </div>
-      ))}
+      {entries.map((entry) => {
+        const isActive = Boolean(activeFilter && activeFilter.value === entry.label);
+        const matchCount = getMatchCount ? getMatchCount(entry) : entry.count;
+        const hasActionableMatches = matchCount > 0;
+
+        return (
+          <div
+            key={entry.label}
+            className={`flex flex-col gap-3 rounded-2xl px-4 py-3 ${
+              isActive ? 'border border-sky-300 bg-sky-50' : 'bg-slate-50'
+            }`}
+          >
+            <div>
+              <span className="text-sm font-medium text-slate-700">
+                {entry.label.replace(/_/g, ' ')}
+              </span>
+              <span className="ml-3 text-sm font-semibold text-slate-900">
+                {entry.count.toLocaleString()}
+              </span>
+              <span className="ml-2 text-xs text-slate-500">
+                total pattern matches
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {onSelect && hasActionableMatches ? (
+                <button
+                  onClick={() => onSelect(entry)}
+                  className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                    isActive
+                      ? 'bg-sky-900 text-white'
+                      : 'bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  {isActive ? 'Filtered' : 'Filter queue'}
+                </button>
+              ) : (
+                <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-400">
+                  No queue matches
+                </span>
+              )}
+
+              {getActions ? getActions(entry) : null}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -236,6 +291,51 @@ function sortQueue(
   return [...items].sort((a, b) => compareValues(a, b, key, direction));
 }
 
+function applyQueueFilter(items: ClassifiedFile[], filter: QueueFilter) {
+  if (!filter) return items;
+
+  return items.filter((item) => {
+    const itemValue = item[filter.key];
+
+    if (typeof itemValue !== 'string') return false;
+
+    return itemValue === filter.value;
+  });
+}
+
+function getConfidenceBreakdown(items: ClassifiedFile[]) {
+  const counts = {
+    high: 0,
+    medium: 0,
+    low: 0,
+  };
+
+  for (const item of items) {
+    const c = item.action_confidence || 'low';
+    if (counts[c as keyof typeof counts] !== undefined) {
+      counts[c as keyof typeof counts]++;
+    }
+  }
+
+  return counts;
+}
+
+function getRiskSummary(items: ClassifiedFile[]) {
+  const riskMap: Record<string, number> = {};
+
+  for (const item of items) {
+    if (!item.risk_flags) continue;
+
+    for (const flag of item.risk_flags) {
+      riskMap[flag] = (riskMap[flag] || 0) + 1;
+    }
+  }
+
+  return Object.entries(riskMap)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3); // top 3 risks
+}
+
 function App() {
   const [scanOutput, setScanOutput] = useState<string>('No scan yet.');
   const [scanData, setScanData] = useState<ScanResult | null>(null);
@@ -297,6 +397,15 @@ function App() {
   const [busyDuplicateGroupId, setBusyDuplicateGroupId] = useState<string | null>(null);
 
   const [isSupportOpen, setIsSupportOpen] = useState(false);
+
+  const [activeQueueFilter, setActiveQueueFilter] = useState<QueueFilter>(null);
+
+  const [batchPreview, setBatchPreview] = useState<{
+    filter: Exclude<QueueFilter, null>;
+    action: 'archive' | 'remove' | 'keep';
+    items: ClassifiedFile[];
+    total: number;
+  } | null>(null);
 
   useEffect(() => {
     const unsubscribeFinished = window.electronAPI?.onScanFinished?.((data: { output?: string }) => {
@@ -901,17 +1010,39 @@ function App() {
     ] as Array<[string, number | string]>;
   }, [scanData]);
 
+  const filteredReviewFiles = useMemo(() => {
+    return applyQueueFilter(sortedReviewFiles, activeQueueFilter);
+  }, [sortedReviewFiles, activeQueueFilter]);
+  
   const visibleReviewFiles = useMemo(() => {
-    return sortedReviewFiles.slice(0, reviewVisibleCount);
-  }, [sortedReviewFiles, reviewVisibleCount]);
+    return filteredReviewFiles.slice(0, reviewVisibleCount);
+  }, [filteredReviewFiles, reviewVisibleCount]);
+  
+  const filteredArchiveCandidates = useMemo(() => {
+    return applyQueueFilter(sortedArchiveCandidates, activeQueueFilter);
+  }, [sortedArchiveCandidates, activeQueueFilter]);
   
   const visibleArchiveCandidates = useMemo(() => {
-    return sortedArchiveCandidates.slice(0, archiveVisibleCount);
-  }, [sortedArchiveCandidates, archiveVisibleCount]);
+    return filteredArchiveCandidates.slice(0, archiveVisibleCount);
+  }, [filteredArchiveCandidates, archiveVisibleCount]);
+  
+  const filteredRemoveCandidates = useMemo(() => {
+    return applyQueueFilter(sortedRemoveCandidates, activeQueueFilter);
+  }, [sortedRemoveCandidates, activeQueueFilter]);
   
   const visibleRemoveCandidates = useMemo(() => {
-    return sortedRemoveCandidates.slice(0, removeVisibleCount);
-  }, [sortedRemoveCandidates, removeVisibleCount]);
+    return filteredRemoveCandidates.slice(0, removeVisibleCount);
+  }, [sortedRemoveCandidates, activeQueueFilter]);
+
+  const previewConfidence = useMemo(() => {
+    if (!batchPreview) return null;
+    return getConfidenceBreakdown(batchPreview.items);
+  }, [batchPreview]);
+  
+  const previewRisks = useMemo(() => {
+    if (!batchPreview) return [];
+    return getRiskSummary(batchPreview.items);
+  }, [batchPreview]);
 
   const getCurrentScanPayload = () => ({
     preset: scanPreset,
@@ -1086,6 +1217,56 @@ function App() {
     });
   
     setNeedsRescan(true);
+  };
+
+  const buildBatchPreview = (
+    items: ClassifiedFile[],
+    filter: Exclude<QueueFilter, null>,
+    action: 'archive' | 'remove' | 'keep'
+  ) => {
+    const filtered = applyQueueFilter(items, filter);
+  
+    return {
+      filter,
+      action,
+      items: filtered.slice(0, 20),
+      total: filtered.length,
+    };
+  };
+
+  const getPatternPreview = (
+    filter: Exclude<QueueFilter, null>,
+    action: 'archive' | 'remove' | 'keep'
+  ) => {
+    const key = `${filter.key}:${filter.value}`;
+    const preview = scanData?.scan_insights?.pattern_previews?.[key];
+  
+    if (!preview) return null;
+  
+    if (action === 'archive') {
+      return {
+        filter,
+        action,
+        items: preview.archive.items,
+        total: preview.archive.total,
+      };
+    }
+  
+    if (action === 'remove') {
+      return {
+        filter,
+        action,
+        items: preview.remove.items,
+        total: preview.remove.total,
+      };
+    }
+  
+    return {
+      filter,
+      action,
+      items: preview.review.items,
+      total: preview.review.total,
+    };
   };
 
   return (
@@ -1531,6 +1712,148 @@ function App() {
             </section>
           ) : null}
 
+          {activeQueueFilter ? (
+            <section className="rounded-2xl border border-sky-200 bg-sky-50 px-5 py-4 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-600">
+                    Filter Active
+                  </div>
+
+                  <div className="mt-1 text-sm text-slate-700">
+                    <span className="font-semibold text-sky-900">
+                      {activeQueueFilter.key.replace(/_/g, ' ')}
+                    </span>{' '}
+                    ={' '}
+                    <span className="font-semibold text-sky-900">
+                      {activeQueueFilter.value.replace(/_/g, ' ')}
+                    </span>
+                  </div>
+
+                  <div className="mt-1 text-xs text-slate-600">
+                    Showing ranked candidates that match this pattern. Preview counts may differ by action because Archive and Remove are separate recommendation paths.
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setActiveQueueFilter(null)}
+                  className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 ring-1 ring-sky-200 transition hover:bg-sky-100"
+                >
+                  Clear filter
+                </button>
+              </div>
+            </section>
+          ) : null}
+
+          {batchPreview ? (
+            <section className="rounded-2xl border border-slate-200 bg-white px-5 py-5 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                    Batch Preview
+                  </div>
+
+                  <h3 className="mt-1 text-lg font-semibold text-slate-900">
+                    {batchPreview.action === 'archive'
+                      ? 'Preview archive'
+                      : batchPreview.action === 'remove'
+                      ? 'Preview remove'
+                      : 'Preview keep'}{' '}
+                    for {batchPreview.total.toLocaleString()} visible ranked candidate
+                    {batchPreview.total === 1 ? '' : 's'}
+                  </h3>
+
+                  <p className="mt-1 text-sm text-slate-600">
+                    These files match:
+                    <span className="ml-1 font-semibold">
+                      {batchPreview.filter.key.replace(/_/g, ' ')}
+                    </span>{' '}
+                    ={' '}
+                    <span className="font-semibold">
+                      {batchPreview.filter.value.replace(/_/g, ' ')}
+                    </span>
+                  </p>
+
+                  <p className="mt-2 max-w-2xl text-xs leading-5 text-slate-500">
+                    This is a preview only. No files will be changed until batch execution is explicitly added with confirmation and history support.
+                  </p>
+                </div>
+
+                <button
+                  onClick={() => setBatchPreview(null)}
+                  className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="mt-4 grid gap-4 md:grid-cols-2">
+              
+              {/* Confidence */}
+              {previewConfidence && (
+                <div className="rounded-2xl bg-slate-50 px-4 py-3">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Action Confidence
+                  </div>
+                  <div className="mt-2 text-sm text-slate-700">
+                    High: <span className="font-semibold">{previewConfidence.high}</span> ·{' '}
+                    Medium: <span className="font-semibold">{previewConfidence.medium}</span> ·{' '}
+                    Low: <span className="font-semibold">{previewConfidence.low}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Risks */}
+              <div className="rounded-2xl bg-slate-50 px-4 py-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Top Risk Signals
+                </div>
+
+                <div className="mt-2 text-sm text-slate-700">
+                  {previewRisks.length === 0 ? (
+                    "No significant risk signals detected."
+                  ) : (
+                    previewRisks.map(([risk, count]) => (
+                      <div key={risk}>
+                        {risk.replace(/_/g, ' ')} · <span className="font-semibold">{count}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+
+              <div className="mt-4 max-h-[300px] space-y-2 overflow-y-auto">
+                {batchPreview.items.length === 0 ? (
+                  <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500">
+                    No matching visible ranked candidates found for this preview.
+                  </div>
+                ) : (
+                  batchPreview.items.map((file) => (
+                    <div
+                      key={file.path}
+                      className="rounded-xl bg-slate-50 px-4 py-3"
+                    >
+                      <div className="text-sm font-medium text-slate-900">
+                        {file.name}
+                      </div>
+                      <div className="mt-1 break-all text-xs text-slate-500">
+                        {file.path}
+                      </div>
+                      <div className="mt-2 text-xs text-slate-600">
+                        {file.recommended_action} · {file.action_confidence || 'unknown'} confidence
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="mt-4 text-xs text-slate-500">
+                Showing first {batchPreview.items.length} of {batchPreview.total.toLocaleString()} matching candidates.
+              </div>
+            </section>
+          ) : null}
+
           {isBulkActing && bulkProgress ? (
             <section className="rounded-[2rem] border border-violet-200 bg-violet-50 p-6 shadow-sm">
               <div className="flex items-start gap-4">
@@ -1726,6 +2049,65 @@ function App() {
                       <InsightList
                         entries={scanData.scan_insights?.review_context_summary || []}
                         emptyMessage="No decision-context patterns available."
+                        activeFilter={activeQueueFilter}
+                        getMatchCount={(entry) => {
+                          const filter: Exclude<QueueFilter, null> = {
+                            label: entry.label,
+                            key: 'context_type',
+                            value: entry.label,
+                          };
+
+                          const reviewPreview = getPatternPreview(filter, 'keep');
+                          return reviewPreview?.total ?? 0;
+                        }}
+                        onSelect={(entry) => {
+                          const filter: Exclude<QueueFilter, null> = {
+                            label: entry.label,
+                            key: 'context_type',
+                            value: entry.label,
+                          };
+
+                          setActiveQueueFilter(filter);
+                          setReviewVisibleCount(8);
+                          setArchiveVisibleCount(8);
+                          setRemoveVisibleCount(8);
+                        }}
+                        getActions={(entry) => {
+                          const filter: Exclude<QueueFilter, null> = {
+                            label: entry.label,
+                            key: 'context_type',
+                            value: entry.label,
+                          };
+
+                          const archivePreview = getPatternPreview(filter, 'archive');
+                          const removePreview = getPatternPreview(filter, 'remove');
+
+                          return (
+                            <div className="flex flex-wrap items-center gap-2">
+                              {archivePreview && archivePreview.total > 0 ? (
+                                <button
+                                  onClick={() => {
+                                    setBatchPreview(archivePreview);
+                                  }}
+                                  className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800 ring-1 ring-sky-200 transition hover:bg-sky-100"
+                                >
+                                  Archive matches: {archivePreview.total}
+                                </button>
+                              ) : null}
+
+                              {removePreview && removePreview.total > 0 ? (
+                                <button
+                                  onClick={() => {
+                                    setBatchPreview(removePreview);
+                                  }}
+                                  className="rounded-full bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800 ring-1 ring-rose-200 transition hover:bg-rose-100"
+                                >
+                                  Remove matches: {removePreview.total}
+                                </button>
+                              ) : null}
+                            </div>
+                          );
+                        }}
                       />
                     </div>
 
@@ -1736,39 +2118,69 @@ function App() {
                       <InsightList
                         entries={scanData.scan_insights?.top_review_reasons || []}
                         emptyMessage="No decision reasons available."
+                        activeFilter={activeQueueFilter}
+                        getMatchCount={(entry) => {
+                          const filter: Exclude<QueueFilter, null> = {
+                            label: entry.label,
+                            key: 'reason',
+                            value: entry.label,
+                          };
+
+                          const reviewPreview = getPatternPreview(filter, 'keep');
+                          return reviewPreview?.total ?? 0;
+                        }}
+                        onSelect={(entry) => {
+                          const filter: Exclude<QueueFilter, null> = {
+                            label: entry.label,
+                            key: 'reason',
+                            value: entry.label,
+                          };
+
+                          setActiveQueueFilter(filter);
+                          setReviewVisibleCount(8);
+                          setArchiveVisibleCount(8);
+                          setRemoveVisibleCount(8);
+                        }}
+                        getActions={(entry) => {
+                          const filter: Exclude<QueueFilter, null> = {
+                            label: entry.label,
+                            key: 'reason',
+                            value: entry.label,
+                          };
+
+                          const archivePreview = getPatternPreview(filter, 'archive');
+                          const removePreview = getPatternPreview(filter, 'remove');
+
+                          return (
+                            <div className="flex flex-wrap items-center gap-2">
+                              {archivePreview && archivePreview.total > 0 ? (
+                                <button
+                                  onClick={() => {
+                                    setBatchPreview(archivePreview);
+                                  }}
+                                  className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800 ring-1 ring-sky-200 transition hover:bg-sky-100"
+                                >
+                                  Archive matches: {archivePreview.total}
+                                </button>
+                              ) : null}
+
+                              {removePreview && removePreview.total > 0 ? (
+                                <button
+                                  onClick={() => {
+                                    setBatchPreview(removePreview);
+                                  }}
+                                  className="rounded-full bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800 ring-1 ring-rose-200 transition hover:bg-rose-100"
+                                >
+                                  Remove matches: {removePreview.total}
+                                </button>
+                              ) : null}
+                            </div>
+                          );
+                        }}
                       />
                     </div>
                   </div>
                 </SectionCard>
-
-                {scanData.errors.length > 0 && (
-                  <div className="mt-6">
-                    <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400 mb-2">
-                      Sample issues (first {Math.min(10, scanData.errors.length)})
-                    </div>
-
-                    <div className="space-y-2 max-h-60 overflow-y-auto">
-                      {scanData.errors.slice(0, 10).map((err, i) => (
-                        <div
-                          key={i}
-                          className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs"
-                        >
-                          <div className="font-medium text-slate-800">
-                            {err.error_type}
-                          </div>
-
-                          <div className="text-slate-500 break-all mt-1">
-                            {err.path}
-                          </div>
-
-                          <div className="text-slate-400 mt-1">
-                            {err.raw_error || err.error}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </section>
 
               <section className="space-y-6">
@@ -1781,7 +2193,8 @@ function App() {
                     >
                       {sortedReviewFiles.length > 0 ? (
                         <div className="mb-3 text-xs text-slate-500">
-                          Showing top {visibleReviewFiles.length} prioritized decision items from {scanData.review_total} total
+                          Showing top {visibleReviewFiles.length} prioritized decision items
+                          {activeQueueFilter ? ` matching filter from ${filteredReviewFiles.length}` : ` from ${scanData.review_total} total`}
                         </div>
                       ) : null}
 
@@ -1869,7 +2282,8 @@ function App() {
                     >
                       {sortedArchiveCandidates.length > 0 ? ( 
                         <div className="mb-3 text-xs text-slate-500">
-                          Showing top {visibleArchiveCandidates.length} ranked archive candidates from {scanData.archive_total} total
+                          Showing top {visibleArchiveCandidates.length} ranked archive candidates
+                          {activeQueueFilter ? ` matching filter from ${filteredArchiveCandidates.length}` : ` from ${scanData.archive_total} total`}
                         </div>
                       ) : null}
                       
@@ -1957,7 +2371,8 @@ function App() {
                     >
                       {sortedRemoveCandidates.length > 0 ? (
                         <div className="mb-3 text-xs text-slate-500">
-                          Showing top {visibleRemoveCandidates.length} ranked remove candidates from {scanData.remove_total} total
+                          Showing top {visibleRemoveCandidates.length} ranked remove candidates
+                          {activeQueueFilter ? ` matching filter from ${filteredRemoveCandidates.length}` : ` from ${scanData.remove_total} total`}
                         </div>
                       ) : null}
 

@@ -59,6 +59,25 @@ export type DuplicateGroup = {
   hidden_items_count?: number;
 };
 
+export type PatternPreview = {
+  filter: {
+    key: string;
+    value: string;
+  };
+  review: {
+    total: number;
+    items: ClassifiedFile[];
+  };
+  archive: {
+    total: number;
+    items: ClassifiedFile[];
+  };
+  remove: {
+    total: number;
+    items: ClassifiedFile[];
+  };
+};
+
 export type ScanResult = {
   scanned_at: string;
   folder: string;
@@ -128,5 +147,6 @@ export type ScanResult = {
     archive_context_summary: ScanInsightItem[];
     remove_context_summary: ScanInsightItem[];
     top_review_reasons: ScanInsightItem[];
+    pattern_previews?: Record<string, PatternPreview>;
   };
 };

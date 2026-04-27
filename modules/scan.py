@@ -17,7 +17,8 @@ MAX_REMOVE_ITEMS = 100
 MAX_SYSTEM_ITEMS = 100
 MAX_DUPLICATES = 100
 MAX_ERRORS = 100
-MAX_DUPLICATE_ITEMS_PER_GROUP = 10
+MAX_DUPLICATE_ITEMS_PER_GROUP = 7
+MAX_PATTERN_PREVIEW_ITEMS = 20
 
 EXCLUDED_DIR_NAMES = {
     "node_modules",
@@ -1642,6 +1643,19 @@ def build_scan_insights(
     remove_items: list,
     duplicate_groups_total: int,
 ) -> dict:
+    review_context_summary = summarize_queue(review_items, "context_type")
+    archive_context_summary = summarize_queue(archive_items, "context_type")
+    remove_context_summary = summarize_queue(remove_items, "context_type")
+    top_review_reasons = summarize_queue(review_items, "reason")
+
+    pattern_previews = build_pattern_previews(
+        review_items=review_items,
+        archive_items=archive_items,
+        remove_items=remove_items,
+        review_context_summary=review_context_summary,
+        top_review_reasons=top_review_reasons,
+    )
+
     return {
         "queue_summary": [
             {"label": "Needs decision", "count": len(review_items)},
@@ -1649,11 +1663,83 @@ def build_scan_insights(
             {"label": "Remove candidates", "count": len(remove_items)},
             {"label": "Duplicate groups", "count": duplicate_groups_total},
         ],
-        "review_context_summary": summarize_queue(review_items, "context_type"),
-        "archive_context_summary": summarize_queue(archive_items, "context_type"),
-        "remove_context_summary": summarize_queue(remove_items, "context_type"),
-        "top_review_reasons": summarize_queue(review_items, "reason"),
+        "review_context_summary": review_context_summary,
+        "archive_context_summary": archive_context_summary,
+        "remove_context_summary": remove_context_summary,
+        "top_review_reasons": top_review_reasons,
+        "pattern_previews": pattern_previews,
     }
+
+def make_pattern_key(key: str, value: str) -> str:
+    return f"{key}:{value}"
+
+
+def build_pattern_preview_for_filter(
+    *,
+    review_items: list,
+    archive_items: list,
+    remove_items: list,
+    key: str,
+    value: str,
+) -> dict:
+    def matches(item: dict) -> bool:
+        return item.get(key) == value
+
+    matching_review = [item for item in review_items if matches(item)]
+    matching_archive = [item for item in archive_items if matches(item)]
+    matching_remove = [item for item in remove_items if matches(item)]
+
+    return {
+        "filter": {
+            "key": key,
+            "value": value,
+        },
+        "review": {
+            "total": len(matching_review),
+            "items": top_ranked(matching_review, MAX_PATTERN_PREVIEW_ITEMS, rank_review_item),
+        },
+        "archive": {
+            "total": len(matching_archive),
+            "items": top_ranked(matching_archive, MAX_PATTERN_PREVIEW_ITEMS, rank_archive_item),
+        },
+        "remove": {
+            "total": len(matching_remove),
+            "items": top_ranked(matching_remove, MAX_PATTERN_PREVIEW_ITEMS, rank_remove_item),
+        },
+    }
+
+
+def build_pattern_previews(
+    *,
+    review_items: list,
+    archive_items: list,
+    remove_items: list,
+    review_context_summary: list,
+    top_review_reasons: list,
+) -> dict:
+    previews = {}
+
+    for item in review_context_summary:
+      value = item["label"]
+      previews[make_pattern_key("context_type", value)] = build_pattern_preview_for_filter(
+          review_items=review_items,
+          archive_items=archive_items,
+          remove_items=remove_items,
+          key="context_type",
+          value=value,
+      )
+
+    for item in top_review_reasons:
+      value = item["label"]
+      previews[make_pattern_key("reason", value)] = build_pattern_preview_for_filter(
+          review_items=review_items,
+          archive_items=archive_items,
+          remove_items=remove_items,
+          key="reason",
+          value=value,
+      )
+
+    return previews
 
 
 def scan_folder(target_dir: str) -> dict:
