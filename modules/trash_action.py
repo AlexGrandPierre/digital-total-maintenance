@@ -5,6 +5,10 @@ from pathlib import Path
 from datetime import datetime, timezone
 from action_history import append_action_history
 
+def strip_app_data_args(args: list[str]) -> list[str]:
+    if len(args) >= 2 and args[0] == "--app-data":
+        return args[2:]
+    return args
 
 def move_to_trash(file_path: str, mode: str = "single") -> dict:
     source = Path(file_path).expanduser().resolve()
@@ -72,8 +76,9 @@ if __name__ == "__main__":
         }))
         sys.exit(1)
 
-    file_path = sys.argv[1]
-    mode = sys.argv[2] if len(sys.argv) > 2 else "single"
+    args = strip_app_data_args(sys.argv[1:])
+    file_path = args[0] if len(args) >= 1 else ""
+    mode = args[1] if len(args) >= 2 else "single"
 
     result = move_to_trash(file_path, mode=mode)
     print(json.dumps(result))

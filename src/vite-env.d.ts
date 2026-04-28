@@ -62,6 +62,10 @@ interface ElectronAPI {
   browseForFolder?: () => Promise<BrowseResult>;
   getActionHistory?: (limit?: number) => Promise<ActionHistoryEntry[]>;
   restoreFromHistory?: (entry: ActionHistoryEntry) => Promise<ActionResult>;
+  clearActionHistory?: () => Promise<{
+    success: boolean;
+    message: string;
+  }>;
 }
 
 interface Window {

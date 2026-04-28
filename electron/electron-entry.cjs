@@ -1,7 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
-const os = require('os');
+const fs = require('fs');
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -53,7 +53,13 @@ function runPythonScript(scriptPath, args = []) {
 function readActionHistory(limit = 20) {
   return new Promise((resolve) => {
     const historyScriptPath = path.join(__dirname, '..', 'modules', 'action_history.py');
-    const py = spawn('python3', [historyScriptPath, String(limit)]);
+    const py = spawn('python3', [
+      historyScriptPath,
+      '--app-data',
+      getAppDataPath(),
+      String(limit),
+      'read',
+    ]);
 
     let output = '';
     let errorOutput = '';
@@ -80,6 +86,10 @@ function readActionHistory(limit = 20) {
   });
 }
 
+function getAppDataPath() {
+  return app.getPath('userData');
+}
+
 app.whenReady().then(() => {
   createWindow();
 
@@ -92,21 +102,109 @@ app.whenReady().then(() => {
 
     switch (preset) {
       case 'desktop':
-        targetPath = path.join(os.homedir(), 'Desktop');
+        targetPath = app.getPath('desktop');
         break;
       case 'downloads':
-        targetPath = path.join(os.homedir(), 'Downloads');
+        targetPath = app.getPath('downloads');
         break;
       case 'documents':
-        targetPath = path.join(os.homedir(), 'Documents');
+        targetPath = app.getPath('documents');
         break;
       case 'custom':
         targetPath = customPath;
         break;
       case 'test':
       default:
-        targetPath = path.join(os.homedir(), 'Desktop', 'dtm-test-folder');
+        targetPath = path.join(app.getPath('desktop'), 'dtm-test-folder');
         break;
+    }
+
+    if (!targetPath || typeof targetPath !== 'string') {
+      event.sender.send('scan-finished', {
+        output: JSON.stringify({
+          scanned_at: new Date().toISOString(),
+          folder: targetPath || '',
+          mode: 'error',
+          scan_warnings: ['No valid scan target was provided.'],
+          total_files: 0,
+          review_files: [],
+          review_total: 0,
+          system_files: [],
+          system_total: 0,
+          archive_candidates: [],
+          archive_total: 0,
+          remove_candidates: [],
+          remove_total: 0,
+          duplicates: [],
+          duplicates_total: 0,
+          age_buckets: { '<30d': 0, '30-180d': 0, '>180d': 0 },
+          by_ext: {},
+          errors: [
+            {
+              name: '',
+              path: targetPath || '',
+              error_type: 'invalid_scan_target',
+              error: 'No valid scan target was provided.',
+            },
+          ],
+          errors_total: 1,
+          excluded_dirs_count: 0,
+          detail_caps: {},
+          scan_insights: {
+            queue_summary: [],
+            review_context_summary: [],
+            archive_context_summary: [],
+            remove_context_summary: [],
+            top_review_reasons: [],
+            pattern_previews: {},
+          },
+        }),
+      });
+      return;
+    }
+
+    if (!fs.existsSync(targetPath)) {
+      event.sender.send('scan-finished', {
+        output: JSON.stringify({
+          scanned_at: new Date().toISOString(),
+          folder: targetPath,
+          mode: 'error',
+          scan_warnings: [`Scan target does not exist: ${targetPath}`],
+          total_files: 0,
+          review_files: [],
+          review_total: 0,
+          system_files: [],
+          system_total: 0,
+          archive_candidates: [],
+          archive_total: 0,
+          remove_candidates: [],
+          remove_total: 0,
+          duplicates: [],
+          duplicates_total: 0,
+          age_buckets: { '<30d': 0, '30-180d': 0, '>180d': 0 },
+          by_ext: {},
+          errors: [
+            {
+              name: '',
+              path: targetPath,
+              error_type: 'invalid_scan_target',
+              error: `Scan target does not exist: ${targetPath}`,
+            },
+          ],
+          errors_total: 1,
+          excluded_dirs_count: 0,
+          detail_caps: {},
+          scan_insights: {
+            queue_summary: [],
+            review_context_summary: [],
+            archive_context_summary: [],
+            remove_context_summary: [],
+            top_review_reasons: [],
+            pattern_previews: {},
+          },
+        }),
+      });
+      return;
     }
 
     const py = spawn('python3', [scanPath, targetPath]);
@@ -202,7 +300,12 @@ app.whenReady().then(() => {
       };
     }
 
-    const result = await runPythonScript(reviewActionPath, [filePath, mode]);
+    const result = await runPythonScript(reviewActionPath, [
+      '--app-data',
+      getAppDataPath(),
+      filePath,
+      mode,
+    ]);
 
     try {
       return JSON.parse(result.output || '{}');
@@ -226,7 +329,12 @@ app.whenReady().then(() => {
       };
     }
 
-    const result = await runPythonScript(archiveActionPath, [filePath, mode]);
+    const result = await runPythonScript(archiveActionPath, [
+      '--app-data',
+      getAppDataPath(),
+      filePath,
+      mode,
+    ]);
 
     try {
       return JSON.parse(result.output || '{}');
@@ -250,7 +358,12 @@ app.whenReady().then(() => {
       };
     }
 
-    const result = await runPythonScript(trashActionPath, [filePath, mode]);
+    const result = await runPythonScript(trashActionPath, [
+      '--app-data',
+      getAppDataPath(),
+      filePath,
+      mode,
+    ]);
 
     try {
       return JSON.parse(result.output || '{}');
@@ -266,7 +379,12 @@ app.whenReady().then(() => {
     const limit = Number(payload.limit || 20);
     const historyPath = path.join(__dirname, '..', 'modules', 'action_history.py');
 
-    const result = await runPythonScript(historyPath, [String(limit), 'read']);
+    const result = await runPythonScript(historyPath, [
+      '--app-data',
+      getAppDataPath(),
+      String(limit),
+      'read',
+    ]);
 
     try {
       return JSON.parse(result.output || '[]');
@@ -286,7 +404,11 @@ app.whenReady().then(() => {
       };
     }
 
-    const result = await runPythonScript(restoreActionPath, [JSON.stringify(entry)]);
+    const result = await runPythonScript(restoreActionPath, [
+      '--app-data',
+      getAppDataPath(),
+      JSON.stringify(entry),
+    ]);
 
     try {
       return JSON.parse(result.output || '{}');
@@ -294,6 +416,27 @@ app.whenReady().then(() => {
       return {
         success: false,
         message: result.errorOutput || result.output || 'Failed to parse restore action result.',
+      };
+    }
+  });
+
+  ipcMain.handle('clear-action-history', async () => {
+    const fs = require('fs');
+    const historyPath = path.join(app.getPath('userData'), 'action-history.json');
+  
+    try {
+      if (fs.existsSync(historyPath)) {
+        fs.unlinkSync(historyPath);
+      }
+  
+      return {
+        success: true,
+        message: `Cleared local action history at: ${historyPath}`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.message || 'Failed to clear action history.',
       };
     }
   });

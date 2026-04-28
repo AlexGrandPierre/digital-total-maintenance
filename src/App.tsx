@@ -21,7 +21,7 @@ type QueueFilter = {
 } | null;
 
 type BatchPreview = {
-  filter: QueueFilter;
+  filter: Exclude<QueueFilter, null>;
   action: 'archive' | 'remove' | 'keep';
   items: ClassifiedFile[];
   total: number;
@@ -123,41 +123,57 @@ function InsightList({
         return (
           <div
             key={entry.label}
-            className={`flex flex-col gap-3 rounded-2xl px-4 py-3 ${
-              isActive ? 'border border-sky-300 bg-sky-50' : 'bg-slate-50'
+            className={`rounded-2xl border px-4 py-4 transition ${
+              isActive
+                ? 'border-sky-300 bg-sky-50'
+                : 'border-slate-200 bg-slate-50'
             }`}
           >
-            <div>
-              <span className="text-sm font-medium text-slate-700">
-                {entry.label.replace(/_/g, ' ')}
-              </span>
-              <span className="ml-3 text-sm font-semibold text-slate-900">
-                {entry.count.toLocaleString()}
-              </span>
-              <span className="ml-2 text-xs text-slate-500">
-                total pattern matches
-              </span>
-            </div>
+            <div className="flex items-start gap-3">
+              <div
+                className={`mt-1 h-7 w-7 shrink-0 rounded-lg ${
+                  isActive ? 'bg-sky-100 text-sky-800' : 'bg-white text-slate-500'
+                } flex items-center justify-center text-xs font-bold ring-1 ring-slate-200`}
+              >
+                {hasActionableMatches ? '→' : '·'}
+              </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              {onSelect && hasActionableMatches ? (
-                <button
-                  onClick={() => onSelect(entry)}
-                  className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-                    isActive
-                      ? 'bg-sky-900 text-white'
-                      : 'bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  {isActive ? 'Filtered' : 'Filter queue'}
-                </button>
-              ) : (
-                <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-400">
-                  No queue matches
-                </span>
-              )}
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-slate-900">
+                  {entry.label.replace(/_/g, ' ')}
+                </div>
 
-              {getActions ? getActions(entry) : null}
+                <div className="mt-1 text-xs leading-5 text-slate-600">
+                  {entry.count.toLocaleString()} total pattern match
+                  {entry.count === 1 ? '' : 'es'}
+                  {getMatchCount ? (
+                    <>
+                      {' '}· {matchCount.toLocaleString()} in current decision queue
+                    </>
+                  ) : null}
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {onSelect && hasActionableMatches ? (
+                    <button
+                      onClick={() => onSelect(entry)}
+                      className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                        isActive
+                          ? 'bg-sky-900 text-white'
+                          : 'bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {isActive ? 'Inspecting' : 'Inspect'}
+                    </button>
+                  ) : (
+                    <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-400">
+                      No queue matches
+                    </span>
+                  )}
+
+                  {getActions ? getActions(entry) : null}
+                </div>
+              </div>
             </div>
           </div>
         );
@@ -407,6 +423,26 @@ function App() {
     total: number;
   } | null>(null);
 
+  const [sessionStats, setSessionStats] = useState({
+    archived: 0,
+    removed: 0,
+    kept: 0,
+  });
+
+  const incrementSessionStat = (type: 'archived' | 'removed' | 'kept') => {
+    setSessionStats((prev) => ({
+      ...prev,
+      [type]: prev[type] + 1,
+    }));
+  };
+
+  const [selectedBatchPaths, setSelectedBatchPaths] = useState<Set<string>>(new Set());
+
+  const openBatchPreview = (preview: Exclude<BatchPreview, null>) => {
+    setBatchPreview(preview);
+    setSelectedBatchPaths(new Set(preview.items.map((item) => item.path)));
+  };
+
   useEffect(() => {
     const unsubscribeFinished = window.electronAPI?.onScanFinished?.((data: { output?: string }) => {
       const output = data.output || 'Scan completed with no output.';
@@ -545,6 +581,30 @@ function App() {
       setActionHistory(history || []);
     } catch {
       setActionHistory([]);
+    }
+  };
+
+  const handleClearActionHistory = async () => {
+    try {
+      const result = await window.electronAPI?.clearActionHistory?.();
+  
+      if (result?.success) {
+        setActionHistory([]);
+        setActionStatus({
+          tone: 'success',
+          message: result.message,
+        });
+      } else {
+        setActionStatus({
+          tone: 'error',
+          message: result?.message || 'Failed to clear action history.',
+        });
+      }
+    } catch (error) {
+      setActionStatus({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Unexpected clear history failure.',
+      });
     }
   };
 
@@ -699,6 +759,175 @@ function App() {
         ...prev,
         duplicates: updatedGroups,
         duplicates_total: updatedGroups.length,
+      };
+    });
+  };
+
+  const decrementInsightEntries = (
+    entries: Array<{ label: string; count: number }> = [],
+    label: string,
+    decrement: number
+  ) => {
+    return entries
+      .map((entry) => {
+        if (entry.label !== label) return entry;
+  
+        return {
+          ...entry,
+          count: Math.max(0, entry.count - decrement),
+        };
+      })
+      .filter((entry) => entry.count > 0);
+  };
+  
+  const reconcilePatternAfterBatchAction = (
+    preview: Exclude<BatchPreview, null>,
+    actedItems: ClassifiedFile[]
+  ) => {
+    if (actedItems.length === 0) return;
+  
+    const actedPathSet = new Set(actedItems.map((item) => item.path));
+    const patternKey = `${preview.filter.key}:${preview.filter.value}`;
+    const decrement = actedItems.length;
+  
+    setScanData((prev) => {
+      if (!prev?.scan_insights) return prev;
+  
+      const existingPreview = prev.scan_insights.pattern_previews?.[patternKey];
+  
+      const updatedPatternPreview = existingPreview
+        ? {
+            ...existingPreview,
+            review: {
+              ...existingPreview.review,
+              items: existingPreview.review.items.filter((item) => !actedPathSet.has(item.path)),
+            },
+            archive: {
+              ...existingPreview.archive,
+              total:
+                preview.action === 'archive'
+                  ? Math.max(0, existingPreview.archive.total - decrement)
+                  : existingPreview.archive.total,
+              items: existingPreview.archive.items.filter((item) => !actedPathSet.has(item.path)),
+            },
+            remove: {
+              ...existingPreview.remove,
+              total:
+                preview.action === 'remove'
+                  ? Math.max(0, existingPreview.remove.total - decrement)
+                  : existingPreview.remove.total,
+              items: existingPreview.remove.items.filter((item) => !actedPathSet.has(item.path)),
+            },
+          }
+        : null;
+  
+      return {
+        ...prev,
+        scan_insights: {
+          ...prev.scan_insights,
+          review_context_summary:
+            preview.filter.key === 'context_type'
+              ? decrementInsightEntries(
+                  prev.scan_insights.review_context_summary,
+                  preview.filter.value,
+                  decrement
+                )
+              : prev.scan_insights.review_context_summary,
+  
+          top_review_reasons:
+            preview.filter.key === 'reason'
+              ? decrementInsightEntries(
+                  prev.scan_insights.top_review_reasons,
+                  preview.filter.value,
+                  decrement
+                )
+              : prev.scan_insights.top_review_reasons,
+  
+          pattern_previews: updatedPatternPreview
+            ? {
+                ...prev.scan_insights.pattern_previews,
+                [patternKey]: updatedPatternPreview,
+              }
+            : prev.scan_insights.pattern_previews,
+        },
+      };
+    });
+  };
+
+  const reconcileInsightsAfterSingleAction = (
+    file: ClassifiedFile,
+    actionType: 'review' | 'archive' | 'remove'
+  ) => {
+    setScanData((prev) => {
+      if (!prev?.scan_insights) return prev;
+  
+      const decrement = 1;
+  
+      const contextType = file.context_type;
+      const reason = file.reason;
+  
+      const updatedPreviews = { ...(prev.scan_insights.pattern_previews || {}) };
+  
+      const updatePatternPreview = (key: string) => {
+        const existingPreview = updatedPreviews[key];
+        if (!existingPreview) return;
+  
+        updatedPreviews[key] = {
+          ...existingPreview,
+          review: {
+            ...existingPreview.review,
+            total: Math.max(0, existingPreview.review.total - decrement),
+            items: existingPreview.review.items.filter((item) => item.path !== file.path),
+          },
+          archive: {
+            ...existingPreview.archive,
+            total:
+              actionType === 'archive'
+                ? Math.max(0, existingPreview.archive.total - decrement)
+                : existingPreview.archive.total,
+            items: existingPreview.archive.items.filter((item) => item.path !== file.path),
+          },
+          remove: {
+            ...existingPreview.remove,
+            total:
+              actionType === 'remove'
+                ? Math.max(0, existingPreview.remove.total - decrement)
+                : existingPreview.remove.total,
+            items: existingPreview.remove.items.filter((item) => item.path !== file.path),
+          },
+        };
+      };
+  
+      if (contextType) {
+        updatePatternPreview(`context_type:${contextType}`);
+      }
+  
+      if (reason) {
+        updatePatternPreview(`reason:${reason}`);
+      }
+  
+      return {
+        ...prev,
+        scan_insights: {
+          ...prev.scan_insights,
+          review_context_summary: contextType
+            ? decrementInsightEntries(
+                prev.scan_insights.review_context_summary,
+                contextType,
+                decrement
+              )
+            : prev.scan_insights.review_context_summary,
+  
+          top_review_reasons: reason
+            ? decrementInsightEntries(
+                prev.scan_insights.top_review_reasons,
+                reason,
+                decrement
+              )
+            : prev.scan_insights.top_review_reasons,
+  
+          pattern_previews: updatedPreviews,
+        },
       };
     });
   };
@@ -967,6 +1196,12 @@ function App() {
     const archive = scanData.archive_total;
     const remove = scanData.remove_total;
     const oldFiles = scanData.age_buckets['>180d'] || 0;
+
+    const adjustedTotals = {
+      review: scanData.review_total - sessionStats.kept,
+      archive: scanData.archive_total - sessionStats.archived,
+      remove: scanData.remove_total - sessionStats.removed,
+    };
   
     let summary = '';
   
@@ -1044,6 +1279,22 @@ function App() {
     return getRiskSummary(batchPreview.items);
   }, [batchPreview]);
 
+  const adjustedTotals = useMemo(() => {
+    if (!scanData) {
+      return {
+        review: 0,
+        archive: 0,
+        remove: 0,
+      };
+    }
+  
+    return {
+      review: Math.max(0, scanData.review_total - sessionStats.kept - sessionStats.archived - sessionStats.removed),
+      archive: Math.max(0, scanData.archive_total - sessionStats.archived),
+      remove: Math.max(0, scanData.remove_total - sessionStats.removed),
+    };
+  }, [scanData, sessionStats]);
+
   const getCurrentScanPayload = () => ({
     preset: scanPreset,
     customPath: customPath.trim(),
@@ -1103,13 +1354,21 @@ function App() {
 
     if (result?.success) {
       removePathFromQueues(filePath, actionType);
-
+    
+      if (actionType === 'archive') {
+        incrementSessionStat('archived');
+      }
+    
+      if (actionType === 'remove') {
+        incrementSessionStat('removed');
+      }
+    
       await loadActionHistory();
-
+    
       if (rescanAfterSuccess) {
         setNeedsRescan(true);
       }
-
+    
       return {
         success: true,
         message: getSuccessMessage(actionType, result),
@@ -1173,20 +1432,20 @@ function App() {
     setIsBulkActing(false);
 
     if (successCount > 0) {
-      triggerRescan();
+      setNeedsRescan(true);
     }
 
     const actionLabel =
-      actionType === 'review'
-        ? 'moved to DTM Review'
-        : actionType === 'archive'
-        ? 'moved to DTM Archive'
-        : 'moved to Trash';
+  actionType === 'review'
+    ? 'sent to review'
+    : actionType === 'archive'
+    ? 'archived'
+    : 'moved to Trash';
 
     if (failureCount === 0) {
       setActionStatus({
         tone: 'success',
-        message: `Bulk action complete: ${successCount} file${successCount === 1 ? '' : 's'} ${actionLabel}.`,
+        message: `Action complete: ${successCount} visible file${successCount === 1 ? '' : 's'} ${actionLabel}. Refresh when ready to reconcile.`,
       });
     } else {
       setActionStatus({
@@ -1210,6 +1469,7 @@ function App() {
 
   const handleKeepFile = async (filePath: string) => {
     removePathFromQueues(filePath, 'review');
+    incrementSessionStat('kept');
   
     setActionStatus({
       tone: 'success',
@@ -1217,6 +1477,26 @@ function App() {
     });
   
     setNeedsRescan(true);
+  };
+
+  const handleExecuteBatchPreview = async () => {
+    if (!batchPreview || selectedBatchItems.length === 0) return;
+    if (batchPreview.action !== 'archive' && batchPreview.action !== 'remove') return;
+    if (isBulkActing || isScanning) return;
+  
+    reconcilePatternAfterBatchAction(batchPreview, selectedBatchItems);
+  
+    setBatchPreview(null);
+    setSelectedBatchPaths(new Set());
+    
+    setActionStatus({
+      tone: 'success',
+      message: `${
+        batchPreview.action === 'archive'
+          ? 'Archived'
+          : 'Removed'
+      } ${selectedBatchItems.length} selected preview files. Refresh when ready to reconcile.`,
+    });
   };
 
   const buildBatchPreview = (
@@ -1268,6 +1548,25 @@ function App() {
       total: preview.review.total,
     };
   };
+
+  const toggleBatchPath = (filePath: string) => {
+    setSelectedBatchPaths((prev) => {
+      const next = new Set(prev);
+  
+      if (next.has(filePath)) {
+        next.delete(filePath);
+      } else {
+        next.add(filePath);
+      }
+  
+      return next;
+    });
+  };
+  
+  const selectedBatchItems = useMemo(() => {
+    if (!batchPreview) return [];
+    return batchPreview.items.filter((item) => selectedBatchPaths.has(item.path));
+  }, [batchPreview, selectedBatchPaths]);
 
   return (
     <div className="min-h-screen bg-[#f7f7f2] text-slate-900">
@@ -1365,6 +1664,24 @@ function App() {
                         }`}
                       >
                         Restored
+                      </button>
+                    </div>
+
+                    <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
+                        Dev Utility
+                      </div>
+
+                      <p className="mt-1 text-xs leading-5 text-amber-800">
+                        Clears local action history only. This does not restore, move, delete, or modify any files.
+                      </p>
+
+                      <button
+                        onClick={handleClearActionHistory}
+                        disabled={isBulkActing || isScanning}
+                        className="mt-3 rounded-full bg-amber-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                      >
+                        Clear Local History
                       </button>
                     </div>
 
@@ -1520,12 +1837,12 @@ function App() {
                         </p>
                       </InfoPanel>
 
-                      <InfoPanel title="What does 'Needs Review' mean?">
+                      <InfoPanel title="What does 'Needs Decision' mean?">
                         <p>
-                          These files could not be confidently classified by DTM and need human judgment before action.
+                          These files require a user decision before DTM should archive, remove, or keep them in place.
                         </p>
                         <p>
-                          This queue exists to prevent overconfident automation.
+                          This queue protects user control by keeping uncertain choices explicit.
                         </p>
                       </InfoPanel>
 
@@ -1538,9 +1855,9 @@ function App() {
                         </p>
                       </InfoPanel>
 
-                      <InfoPanel title="What are 'Remove Candidates'?">
+                      <InfoPanel title="What is the 'Remove Queue'?">
                         <p>
-                          These files appear temporary, disposable, or low-value.
+                          These files appear temporary, disposable, or low-value based on DTM’s current scan logic.
                         </p>
                         <p>
                           DTM moves them to Trash rather than permanently deleting them.
@@ -1594,24 +1911,6 @@ function App() {
                 />
               </div>
             </div>
-
-            {needsRescan && !isScanning && (
-              <div className="mt-4 flex items-center gap-3">
-                <button
-                  onClick={() => {
-                    setNeedsRescan(false);
-                    triggerRescan();
-                  }}
-                  className="rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-                >
-                  Refresh Scan
-                </button>
-
-                <span className="text-sm text-slate-500">
-                  Changes have been made. Refresh to reconcile scan results.
-                </span>
-              </div>
-            )}
 
             <div className="flex flex-wrap gap-3">
               <ModePill
@@ -1712,6 +2011,52 @@ function App() {
             </section>
           ) : null}
 
+          {(sessionStats.archived > 0 || sessionStats.removed > 0 || sessionStats.kept > 0) ? (
+            <section className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
+                    Session Activity
+                  </div>
+
+                  <div className="mt-1 text-sm text-emerald-900">
+                    {sessionStats.archived > 0 ? (
+                      <span className="mr-3">
+                        Archived <span className="font-semibold">{sessionStats.archived}</span>
+                      </span>
+                    ) : null}
+
+                    {sessionStats.removed > 0 ? (
+                      <span className="mr-3">
+                        Removed <span className="font-semibold">{sessionStats.removed}</span>
+                      </span>
+                    ) : null}
+
+                    {sessionStats.kept > 0 ? (
+                      <span>
+                        Kept <span className="font-semibold">{sessionStats.kept}</span>
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-1 text-xs text-emerald-700">
+                    Results reflect the last scan plus this session’s actions.
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => {
+                    setSessionStats({ archived: 0, removed: 0, kept: 0 });
+                    triggerRescan();
+                  }}
+                  className="rounded-full bg-emerald-900 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                >
+                  Refresh Scan
+                </button>
+              </div>
+            </section>
+          ) : null}
+
           {activeQueueFilter ? (
             <section className="rounded-2xl border border-sky-200 bg-sky-50 px-5 py-4 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1746,36 +2091,39 @@ function App() {
           ) : null}
 
           {batchPreview ? (
-            <section className="rounded-2xl border border-slate-200 bg-white px-5 py-5 shadow-sm">
+            <section className="rounded-[2rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                    Batch Preview
+                    Action Preview
                   </div>
 
-                  <h3 className="mt-1 text-lg font-semibold text-slate-900">
+                  <h3 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
                     {batchPreview.action === 'archive'
-                      ? 'Preview archive'
+                      ? 'Preview archive action'
                       : batchPreview.action === 'remove'
-                      ? 'Preview remove'
-                      : 'Preview keep'}{' '}
-                    for {batchPreview.total.toLocaleString()} visible ranked candidate
-                    {batchPreview.total === 1 ? '' : 's'}
+                      ? 'Preview remove action'
+                      : 'Preview keep action'}
                   </h3>
 
+                  <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
+                    DTM is showing a bounded sample of files matching this pattern before you commit to an action.
+                  </p>
+
                   <p className="mt-1 text-sm text-slate-600">
-                    These files match:
+                    Pattern:
                     <span className="ml-1 font-semibold">
-                      {batchPreview.filter.key.replace(/_/g, ' ')}
-                    </span>{' '}
-                    ={' '}
-                    <span className="font-semibold">
                       {batchPreview.filter.value.replace(/_/g, ' ')}
+                    </span>
+                    {' '}· based on{' '}
+                    <span className="font-semibold">
+                      {batchPreview.filter.key.replace(/_/g, ' ')}
                     </span>
                   </p>
 
                   <p className="mt-2 max-w-2xl text-xs leading-5 text-slate-500">
-                    This is a preview only. No files will be changed until batch execution is explicitly added with confirmation and history support.
+                    No files have been changed. This preview shows what would happen if you apply this action.
+                    All actions in DTM are reversible.
                   </p>
                 </div>
 
@@ -1788,40 +2136,91 @@ function App() {
               </div>
 
               <div className="mt-4 grid gap-4 md:grid-cols-2">
-              
-              {/* Confidence */}
-              {previewConfidence && (
+                {/* Confidence */}
+                {previewConfidence && (
+                  <div className="rounded-2xl bg-slate-50 px-4 py-3">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      Action Confidence
+                    </div>
+                    <div className="mt-2 text-sm text-slate-700">
+                      High: <span className="font-semibold">{previewConfidence.high}</span> ·{' '}
+                      Medium: <span className="font-semibold">{previewConfidence.medium}</span> ·{' '}
+                      Low: <span className="font-semibold">{previewConfidence.low}</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Risks */}
                 <div className="rounded-2xl bg-slate-50 px-4 py-3">
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                    Action Confidence
+                    Top Risk Signals
                   </div>
+
                   <div className="mt-2 text-sm text-slate-700">
-                    High: <span className="font-semibold">{previewConfidence.high}</span> ·{' '}
-                    Medium: <span className="font-semibold">{previewConfidence.medium}</span> ·{' '}
-                    Low: <span className="font-semibold">{previewConfidence.low}</span>
+                    {previewRisks.length === 0 ? (
+                      "No significant risk signals detected."
+                    ) : (
+                      previewRisks.map(([risk, count]) => (
+                        <div key={risk}>
+                          {risk.replace(/_/g, ' ')} · <span className="font-semibold">{count}</span>
+                        </div>
+                      ))
+                    )}
                   </div>
-                </div>
-              )}
-
-              {/* Risks */}
-              <div className="rounded-2xl bg-slate-50 px-4 py-3">
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  Top Risk Signals
-                </div>
-
-                <div className="mt-2 text-sm text-slate-700">
-                  {previewRisks.length === 0 ? (
-                    "No significant risk signals detected."
-                  ) : (
-                    previewRisks.map(([risk, count]) => (
-                      <div key={risk}>
-                        {risk.replace(/_/g, ' ')} · <span className="font-semibold">{count}</span>
-                      </div>
-                    ))
-                  )}
                 </div>
               </div>
-            </div>
+
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3">
+                <div className="text-sm text-slate-700">
+                  <span className="font-semibold">
+                    {selectedBatchItems.length.toLocaleString()}
+                  </span>{' '}
+                  selected from{' '}
+                  <span className="font-semibold">
+                    {batchPreview.items.length.toLocaleString()}
+                  </span>{' '}
+                  shown preview files
+                </div>
+
+                <div className="flex gap-2">
+                <button
+                  onClick={() => handleExecuteBatchPreview()}
+                  disabled={
+                    !batchPreview ||
+                    selectedBatchItems.length === 0 ||
+                    isBulkActing ||
+                    isScanning ||
+                    batchPreview.action === 'keep'
+                  }
+                  className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+                    !batchPreview ||
+                    selectedBatchItems.length === 0 ||
+                    isBulkActing ||
+                    isScanning ||
+                    batchPreview.action === 'keep'
+                      ? 'cursor-not-allowed bg-slate-200 text-slate-500'
+                      : batchPreview.action === 'archive'
+                      ? 'bg-sky-900 text-white hover:bg-sky-700'
+                      : 'bg-rose-900 text-white hover:bg-rose-700'
+                  }`}
+                >
+                  {batchPreview?.action === 'archive'
+                    ? `Apply archive to ${selectedBatchItems.length}`
+                    : batchPreview?.action === 'remove'
+                    ? `Move ${selectedBatchItems.length} to Trash`
+                    : 'Keep batch unavailable'}
+                </button>
+
+                  <button
+                    onClick={() => {
+                      setActiveQueueFilter(batchPreview.filter);
+                    }}
+                    className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200 hover:bg-slate-100"
+                  >
+                    Inspect files
+                  </button>
+                </div>
+              </div>
 
               <div className="mt-4 max-h-[300px] space-y-2 overflow-y-auto">
                 {batchPreview.items.length === 0 ? (
@@ -1834,15 +2233,26 @@ function App() {
                       key={file.path}
                       className="rounded-xl bg-slate-50 px-4 py-3"
                     >
-                      <div className="text-sm font-medium text-slate-900">
-                        {file.name}
-                      </div>
-                      <div className="mt-1 break-all text-xs text-slate-500">
-                        {file.path}
-                      </div>
-                      <div className="mt-2 text-xs text-slate-600">
-                        {file.recommended_action} · {file.action_confidence || 'unknown'} confidence
-                      </div>
+                      <label className="flex items-start gap-3 rounded-xl bg-slate-50 px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedBatchPaths.has(file.path)}
+                          onChange={() => toggleBatchPath(file.path)}
+                          className="mt-1"
+                        />
+
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-medium text-slate-900">
+                            {file.name}
+                          </div>
+                          <div className="mt-1 break-all text-xs text-slate-500">
+                            {file.path}
+                          </div>
+                          <div className="mt-2 text-xs text-slate-600">
+                            {file.recommended_action} · {file.action_confidence || 'unknown'} confidence
+                          </div>
+                        </div>
+                      </label>
                     </div>
                   ))
                 )}
@@ -1990,58 +2400,28 @@ function App() {
               <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <StatCard label="Total files" value={scanData.total_files} tone="neutral" />
                 <StatCard
-                  label="Needs review"
-                  value={scanData.review_total}
+                  label="Needs decision"
+                  value={adjustedTotals.review}
                   tone={scanData.review_files.length > 0 ? 'warn' : 'good'}
                 />
                 <StatCard
-                  label="Duplicates"
+                  label="Duplicate Groups"
                   value={scanData.duplicates_total}
                   tone={scanData.duplicates.length > 0 ? 'warn' : 'good'}
                 />
                 <StatCard
-                  label="Inspection issues"
+                  label="Scan issues"
                   value={scanData.errors_total}
                   tone={scanData.errors_total > 0 ? 'danger' : 'good'}
                 />
               </section>
 
-              <section className="grid grid-cols-1 gap-6 xl:grid-cols-4">
+              <section className="grid grid-cols-1 gap-6 xl:grid-cols-[1.4fr_0.8fr]">
                 <SectionCard
-                  title="Age Buckets"
-                  subtitle="How recently files in the scan target were modified."
+                  title="Insights & Actions"
+                  subtitle="Global scan patterns with action previews when DTM has matching candidates."
                 >
-                  <KeyValueList
-                    entries={ageBucketEntries}
-                    emptyMessage="No age information available yet."
-                  />
-                </SectionCard>
-
-                <SectionCard
-                  title="Top File Types"
-                  subtitle="Most common extensions found in the current scan."
-                >
-                  <KeyValueList
-                    entries={topExtensions}
-                    emptyMessage="No file type data available yet."
-                  />
-                </SectionCard>
-
-                <SectionCard
-                  title="Queue Summary"
-                  subtitle="A high-level map of the decisions DTM found in this scan."
-                >
-                  <InsightList
-                    entries={scanData.scan_insights?.queue_summary || []}
-                    emptyMessage="No queue summary available yet."
-                  />
-                </SectionCard>
-
-                <SectionCard
-                  title="What DTM Is Seeing"
-                  subtitle="The most common patterns behind the current decision queues."
-                >
-                  <div className="space-y-5">
+                  <div className="space-y-6">
                     <div>
                       <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
                         Needs Decision Contexts
@@ -2082,30 +2462,33 @@ function App() {
                           const archivePreview = getPatternPreview(filter, 'archive');
                           const removePreview = getPatternPreview(filter, 'remove');
 
-                          return (
-                            <div className="flex flex-wrap items-center gap-2">
-                              {archivePreview && archivePreview.total > 0 ? (
-                                <button
-                                  onClick={() => {
-                                    setBatchPreview(archivePreview);
-                                  }}
-                                  className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800 ring-1 ring-sky-200 transition hover:bg-sky-100"
-                                >
-                                  Archive matches: {archivePreview.total}
-                                </button>
-                              ) : null}
+                          const archiveTotal = archivePreview?.total ?? 0;
+                          const removeTotal = removePreview?.total ?? 0;
 
-                              {removePreview && removePreview.total > 0 ? (
-                                <button
-                                  onClick={() => {
-                                    setBatchPreview(removePreview);
-                                  }}
-                                  className="rounded-full bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800 ring-1 ring-rose-200 transition hover:bg-rose-100"
-                                >
-                                  Remove matches: {removePreview.total}
-                                </button>
-                              ) : null}
-                            </div>
+                          if (archiveTotal === 0 && removeTotal === 0) {
+                            return null;
+                          }
+
+                          const primaryAction = archiveTotal >= removeTotal ? 'archive' : 'remove';
+                          const primaryPreview = primaryAction === 'archive' ? archivePreview : removePreview;
+
+                          return (
+                            <button
+                              onClick={() => {
+                                if (primaryPreview) {
+                                  openBatchPreview(primaryPreview);
+                                }
+                              }}
+                              className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                                primaryAction === 'archive'
+                                  ? 'bg-sky-900 text-white hover:bg-sky-700'
+                                  : 'bg-rose-900 text-white hover:bg-rose-700'
+                              }`}
+                            >
+                              {primaryAction === 'archive'
+                                ? `Preview archive (${archiveTotal})`
+                                : `Preview remove (${removeTotal})`}
+                            </button>
                           );
                         }}
                       />
@@ -2151,505 +2534,731 @@ function App() {
                           const archivePreview = getPatternPreview(filter, 'archive');
                           const removePreview = getPatternPreview(filter, 'remove');
 
-                          return (
-                            <div className="flex flex-wrap items-center gap-2">
-                              {archivePreview && archivePreview.total > 0 ? (
-                                <button
-                                  onClick={() => {
-                                    setBatchPreview(archivePreview);
-                                  }}
-                                  className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800 ring-1 ring-sky-200 transition hover:bg-sky-100"
-                                >
-                                  Archive matches: {archivePreview.total}
-                                </button>
-                              ) : null}
+                          const archiveTotal = archivePreview?.total ?? 0;
+                          const removeTotal = removePreview?.total ?? 0;
 
-                              {removePreview && removePreview.total > 0 ? (
-                                <button
-                                  onClick={() => {
-                                    setBatchPreview(removePreview);
-                                  }}
-                                  className="rounded-full bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800 ring-1 ring-rose-200 transition hover:bg-rose-100"
-                                >
-                                  Remove matches: {removePreview.total}
-                                </button>
-                              ) : null}
-                            </div>
+                          if (archiveTotal === 0 && removeTotal === 0) {
+                            return null;
+                          }
+
+                          const primaryAction = archiveTotal >= removeTotal ? 'archive' : 'remove';
+                          const primaryPreview = primaryAction === 'archive' ? archivePreview : removePreview;
+
+                          return (
+                            <button
+                              onClick={() => {
+                                if (primaryPreview) {
+                                  openBatchPreview(primaryPreview);
+                                }
+                              }}
+                              className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                                primaryAction === 'archive'
+                                  ? 'bg-sky-900 text-white hover:bg-sky-700'
+                                  : 'bg-rose-900 text-white hover:bg-rose-700'
+                              }`}
+                            >
+                              {primaryAction === 'archive'
+                                ? `Preview archive (${archiveTotal})`
+                                : `Preview remove (${removeTotal})`}
+                            </button>
                           );
                         }}
                       />
                     </div>
                   </div>
                 </SectionCard>
+
+                <div className="space-y-6">
+                  <SectionCard
+                    title="Queue Summary"
+                    subtitle="A compact map of the current decision landscape."
+                  >
+                    <InsightList
+                      entries={scanData.scan_insights?.queue_summary || []}
+                      emptyMessage="No queue summary available yet."
+                    />
+                  </SectionCard>
+
+                  <SectionCard
+                    title="Scan Context"
+                    subtitle="Supporting file distribution signals from this scan."
+                  >
+                    <div className="space-y-5">
+                      <div>
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                          Age Buckets
+                        </div>
+                        <KeyValueList
+                          entries={ageBucketEntries}
+                          emptyMessage="No age information available yet."
+                        />
+                      </div>
+
+                      <div>
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                          Top File Types
+                        </div>
+                        <KeyValueList
+                          entries={topExtensions}
+                          emptyMessage="No file type data available yet."
+                        />
+                      </div>
+                    </div>
+                  </SectionCard>
+                </div>
               </section>
 
+              {(activeQueueFilter || batchPreview) && (
+                <section className="rounded-2xl border border-sky-200 bg-sky-50 px-5 py-4 shadow-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-4">
+                    
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-700">
+                        Active Focus
+                      </div>
+
+                      <div className="mt-1 text-sm text-sky-900">
+                        {activeQueueFilter && (
+                          <>
+                            Filtering by{' '}
+                            <span className="font-semibold">
+                              {activeQueueFilter.key.replace(/_/g, ' ')}
+                            </span>{' '}
+                            ={' '}
+                            <span className="font-semibold">
+                              {activeQueueFilter.value.replace(/_/g, ' ')}
+                            </span>
+                          </>
+                        )}
+
+                        {batchPreview && (
+                          <>
+                            {' '}• Previewing{' '}
+                            <span className="font-semibold">
+                              {batchPreview.action}
+                            </span>{' '}
+                            candidates ({batchPreview.total.toLocaleString()} matches)
+                          </>
+                        )}
+                      </div>
+
+                      <div className="mt-1 text-xs text-sky-700">
+                        Queues and previews are scoped to this focus.
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => {
+                        setActiveQueueFilter(null);
+                        setBatchPreview(null);
+                      }}
+                      className="rounded-full bg-sky-900 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
+                    >
+                      Clear focus
+                    </button>
+
+                  </div>
+                </section>
+              )}
+
               <section className="space-y-6">
-                <div className="space-y-6">
-                  {/* MAIN WORKSPACE */}
-                  <section className="grid grid-cols-1 gap-6 xl:grid-cols-2"> 
-                    <SectionCard
-                      title="Needs Decision"
-                      subtitle="Files that require a decision: keep, archive, or remove."
-                    >
-                      {sortedReviewFiles.length > 0 ? (
-                        <div className="mb-3 text-xs text-slate-500">
-                          Showing top {visibleReviewFiles.length} prioritized decision items
-                          {activeQueueFilter ? ` matching filter from ${filteredReviewFiles.length}` : ` from ${scanData.review_total} total`}
-                        </div>
-                      ) : null}
-
-                      {visibleReviewFiles.length > 0 ? (
-                        <div className="mb-4 flex flex-wrap gap-3">
-                          <button
-                            onClick={handleBulkArchiveFromReview}
-                            disabled={
-                              isBulkActing ||
-                              isScanning ||
-                              visibleReviewFiles.length === 0
-                            }
-                            className="rounded-full bg-amber-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-                          >
-                            {isBulkActing && bulkProgress?.action === 'review'
-                              ? 'Bulk moving…'
-                              : `Archive visible ${visibleReviewFiles.length}`}
-                          </button>
-                        </div>
-                      ) : null}
-
-                      {sortedReviewFiles.length > 0 ? (
-                        <QueueSortControls
-                          sortKey={reviewSortKey}
-                          sortDirection={reviewSortDirection}
-                          onSortKeyChange={setReviewSortKey}
-                          onSortDirectionChange={setReviewSortDirection}
-                          disabled={isBulkActing}
-                        />
-                      ) : null}
-
-                      {scanData.review_files.length === 0 ? (
-                        <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
-                          No suspicious files detected in this scan.
-                        </div>
-                      ) : (
-                        <div className="space-y-3">
-                          {visibleReviewFiles.map((file) => (
-                            <QueueFileCard
-                              key={file.path}
-                              file={file}
-                              tone="review"
-                              actionLabel="Archive"
-                              busyLabel="Archiving…"
-                              onAction={handleMoveToArchive}
-                              onKeep={handleKeepFile}
-                              onRemove={handleMoveToTrash}
-                              recommendedAction="archive"
-                              isBusy={busyPath === file.path || isBulkActing}
-                            />
-                          ))}
-
-                          {sortedReviewFiles.length > 8 ? (
-                            <div className="mt-4 flex gap-3">
-                              {reviewVisibleCount < sortedReviewFiles.length ? (
-                                <button
-                                  onClick={() =>
-                                    setReviewVisibleCount((prev) =>
-                                      Math.min(prev + 8, sortedReviewFiles.length)
-                                    )
-                                  }
-                                  className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
-                                >
-                                  Show more
-                                </button>
-                              ) : null}
-
-                              {reviewVisibleCount > 8 ? (
-                                <button
-                                  onClick={() => setReviewVisibleCount(8)}
-                                  className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
-                                >
-                                  Show less
-                                </button>
-                              ) : null}
-                            </div>
-                          ) : null}
-                        </div>
-                      )}
-                    </SectionCard>
-
-                    <SectionCard
-                      title="Archive Candidates"
-                      subtitle="Ranked files that appear worth keeping, but not keeping active in the current workspace."
-                    >
-                      {sortedArchiveCandidates.length > 0 ? ( 
-                        <div className="mb-3 text-xs text-slate-500">
-                          Showing top {visibleArchiveCandidates.length} ranked archive candidates
-                          {activeQueueFilter ? ` matching filter from ${filteredArchiveCandidates.length}` : ` from ${scanData.archive_total} total`}
-                        </div>
-                      ) : null}
+                {(sessionStats.archived > 0 || sessionStats.removed > 0 || sessionStats.kept > 0) && (
+                  <section className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-4">
                       
-                      {visibleArchiveCandidates.length > 0 ? ( 
-                        <div className="mb-4 flex flex-wrap gap-3">
-                          <button
-                            onClick={handleBulkMoveToArchive}
-                            disabled={
-                              isBulkActing ||
-                              isScanning ||
-                              visibleArchiveCandidates.length === 0
-                            }
-                            className="rounded-full bg-sky-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-                          >
-                            {isBulkActing && bulkProgress?.action === 'archive'
-                              ? 'Bulk archiving…'
-                              : `Move visible ${visibleArchiveCandidates.length} to Archive`}
-                          </button>
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
+                          Session Activity
                         </div>
-                      ) : null}
 
-                      {sortedArchiveCandidates.length > 0 ? (
-                        <QueueSortControls
-                          sortKey={archiveSortKey}
-                          sortDirection={archiveSortDirection}
-                          onSortKeyChange={setArchiveSortKey}
-                          onSortDirectionChange={setArchiveSortDirection}
-                          disabled={isBulkActing}
-                        />
-                      ) : null}
-
-                      {scanData.archive_candidates.length === 0 ? (
-                        <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
-                          No archive candidates detected in this scan.
+                        <div className="mt-1 text-sm text-emerald-900">
+                          {sessionStats.archived > 0 && (
+                            <span className="mr-3">
+                              Archived <span className="font-semibold">{sessionStats.archived}</span>
+                            </span>
+                          )}
+                          {sessionStats.removed > 0 && (
+                            <span className="mr-3">
+                              Removed <span className="font-semibold">{sessionStats.removed}</span>
+                            </span>
+                          )}
+                          {sessionStats.kept > 0 && (
+                            <span>
+                              Kept <span className="font-semibold">{sessionStats.kept}</span>
+                            </span>
+                          )}
                         </div>
+
+                        <div className="mt-1 text-xs text-emerald-700">
+                          Your workspace has changed. Refresh scan to fully reconcile results.
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          setSessionStats({ archived: 0, removed: 0, kept: 0 });
+                          triggerRescan();
+                        }}
+                        className="rounded-full bg-emerald-900 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                      >
+                        Refresh Scan
+                      </button>
+
+                    </div>
+                  </section>
+                )}
+                <section className="space-y-6">
+                  <section className="rounded-[2rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                          Detailed Candidate Workspace
+                        </div>
+                        <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
+                          Review and act on ranked file candidates
+                        </h2>
+                        <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
+                          These queues show bounded, ranked examples from the current scan
+                          {activeQueueFilter ? ' and your active focus' : ''}. Use them for file-level inspection and controlled actions.
+                        </p>
+                      </div>
+
+                      {activeQueueFilter ? (
+                        <span className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800 ring-1 ring-sky-200">
+                          Scoped view
+                        </span>
                       ) : (
-                        <div className="space-y-3">
-                          {visibleArchiveCandidates.map((file) => (
-                            <QueueFileCard
-                              key={file.path}
-                              file={file}
-                              tone="archive"
-                              actionLabel="Move to Archive"
-                              busyLabel="Archiving…"
-                              onAction={handleMoveToArchive}
-                              onKeep={handleKeepFile}
-                              onRemove={handleMoveToTrash}
-                              recommendedAction="archive"
-                              isBusy={busyPath === file.path || isBulkActing}
-                            />
-                          ))}
-
-                          {sortedArchiveCandidates.length > 8 ? (
-                            <div className="mt-4 flex gap-3">
-                              {archiveVisibleCount < sortedArchiveCandidates.length ? (
-                                <button
-                                  onClick={() =>
-                                    setArchiveVisibleCount((prev) =>
-                                      Math.min(prev + 8, sortedArchiveCandidates.length)
-                                    )
-                                  }
-                                  className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
-                                >
-                                  Show more
-                                </button>
-                              ) : null}
-
-                              {archiveVisibleCount > 8 ? (
-                                <button
-                                  onClick={() => setArchiveVisibleCount(8)}
-                                  className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
-                                >
-                                  Show less
-                                </button>
-                              ) : null}
-                            </div>
-                          ) : null}
-                        </div>
+                        <span className="rounded-full bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">
+                          Full ranked view
+                        </span>
                       )}
-                    </SectionCard>
+                    </div>
+                  </section>
 
-                    <SectionCard
-                      title="Remove Candidates"
-                      subtitle="Ranked files that appear disposable, temporary, or low-value. DTM moves these to Trash, not permanent deletion."
-                    >
-                      {sortedRemoveCandidates.length > 0 ? (
-                        <div className="mb-3 text-xs text-slate-500">
-                          Showing top {visibleRemoveCandidates.length} ranked remove candidates
-                          {activeQueueFilter ? ` matching filter from ${filteredRemoveCandidates.length}` : ` from ${scanData.remove_total} total`}
-                        </div>
-                      ) : null}
+                  <div className="space-y-6">
+                    {/* MAIN WORKSPACE */}
+                    <section className="grid grid-cols-1 gap-6 xl:grid-cols-2"> 
+                      <SectionCard
+                        title="Decision Queue"
+                        subtitle="Filtered, ranked candidates based on your current focus."
+                      >
+                        {activeQueueFilter && (
+                          <div className="mb-2 text-xs text-sky-700">
+                            Showing results scoped to current focus
+                          </div>
+                        )}
 
-                      {visibleRemoveCandidates.length > 0 ? (
-                        <div className="mb-4 flex flex-wrap gap-3">
-                          <button
-                            onClick={handleBulkMoveToTrash}
-                            disabled={
-                              isBulkActing ||
-                              isScanning ||
-                              visibleRemoveCandidates.length === 0
-                            }
-                            className="rounded-full bg-rose-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-rose-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-                          >
-                            {isBulkActing && bulkProgress?.action === 'remove'
-                              ? 'Bulk removing…'
-                              : `Move visible ${visibleRemoveCandidates.length} to Trash`}
-                          </button>
-                        </div>
-                      ) : null}
+                        {sortedReviewFiles.length > 0 ? (
+                          <div className="mb-3 text-xs text-slate-500">
+                            Showing top {visibleReviewFiles.length} prioritized decision items
+                            {activeQueueFilter
+                              ? ` matching current focus from ${filteredReviewFiles.length}`
+                              : ` from ~${adjustedTotals.review.toLocaleString()} estimated remaining`}
+                          </div>
+                        ) : null}
 
-                      {sortedRemoveCandidates.length > 0 ? (
-                        <QueueSortControls
-                          sortKey={removeSortKey}
-                          sortDirection={removeSortDirection}
-                          onSortKeyChange={setRemoveSortKey}
-                          onSortDirectionChange={setRemoveSortDirection}
-                          disabled={isBulkActing}
-                        />
-                      ) : null}
+                        {visibleReviewFiles.length > 0 ? (
+                          <div className="mb-4 flex flex-wrap gap-3">
+                            <button
+                              onClick={handleBulkArchiveFromReview}
+                              disabled={
+                                isBulkActing ||
+                                isScanning ||
+                                visibleReviewFiles.length === 0
+                              }
+                              className="rounded-full bg-amber-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                            >
+                              {isBulkActing && bulkProgress?.action === 'review'
+                                ? 'Bulk moving…'
+                                : `Apply archive to visible ${visibleReviewFiles.length}`}
+                            </button>
+                          </div>
+                        ) : null}
 
-                      {scanData.remove_candidates.length === 0 ? (
-                        <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
-                          No remove candidates detected in this scan.
-                        </div>
-                      ) : (
-                        <div className="space-y-3">
-                          {visibleRemoveCandidates.map((file) => (
-                            <QueueFileCard
-                              key={file.path}
-                              file={file}
-                              tone="remove"
-                              actionLabel="Move to Trash"
-                              busyLabel="Removing…"
-                              onAction={handleMoveToTrash}
-                              onKeep={handleKeepFile}
-                              onArchive={handleMoveToArchive}
-                              recommendedAction="remove"
-                              isBusy={busyPath === file.path || isBulkActing}
-                            />
-                          ))}
+                        {sortedReviewFiles.length > 0 ? (
+                          <QueueSortControls
+                            sortKey={reviewSortKey}
+                            sortDirection={reviewSortDirection}
+                            onSortKeyChange={setReviewSortKey}
+                            onSortDirectionChange={setReviewSortDirection}
+                            disabled={isBulkActing}
+                          />
+                        ) : null}
 
-                          {sortedRemoveCandidates.length > 8 ? (
-                            <div className="mt-4 flex gap-3">
-                              {removeVisibleCount < sortedRemoveCandidates.length ? (
-                                <button
-                                  onClick={() =>
-                                    setRemoveVisibleCount((prev) =>
-                                      Math.min(prev + 8, sortedRemoveCandidates.length)
-                                    )
-                                  }
-                                  className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
-                                >
-                                  Show more
-                                </button>
-                              ) : null}
+                        {scanData.review_files.length === 0 ? (
+                          <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
+                            No suspicious files detected in this scan.
+                          </div>
+                        ) : (
+                          <div className="space-y-3">
+                            {visibleReviewFiles.map((file) => (
+                              <QueueFileCard
+                                key={file.path}
+                                file={file}
+                                tone="review"
+                                actionLabel="Archive"
+                                busyLabel="Archiving…"
+                                onAction={async (filePath) => {
+                                  await handleMoveToArchive(filePath);
+                                  reconcileInsightsAfterSingleAction(file, 'archive');
+                                }}
+                                onKeep={async (filePath) => {
+                                  await handleKeepFile(filePath);
+                                  reconcileInsightsAfterSingleAction(file, 'review');
+                                }}
+                                onRemove={async (filePath) => {
+                                  await handleMoveToTrash(filePath);
+                                  reconcileInsightsAfterSingleAction(file, 'remove');
+                                }}
+                                recommendedAction="archive"
+                                isBusy={busyPath === file.path || isBulkActing}
+                              />
+                            ))}
 
-                              {removeVisibleCount > 8 ? (
-                                <button
-                                  onClick={() => setRemoveVisibleCount(8)}
-                                  className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
-                                >
-                                  Show less
-                                </button>
-                              ) : null}
-                            </div>
-                          ) : null}
-                        </div>
-                      )}
-                    </SectionCard>
-
-                    <SectionCard
-                      title="Duplicate Review"
-                      subtitle="Grouped file families that appear to contain duplicate copies."
-                    >
-                      {visibleDuplicates.length > 0 ? (
-                        <div className="mb-3 text-xs text-slate-500">
-                          Showing {visibleDuplicates.length} of {scanData.duplicates_total} duplicate groups
-                        </div>
-                      ) : null}
-
-                      {scanData.duplicates.length === 0 ? (
-                        <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
-                          No duplicate groups detected in this scan.
-                        </div>
-                      ) : (
-                        <div className="space-y-4">
-                          {visibleDuplicates.map((group, index) => {
-                            const selectedPrimaryPath = getSelectedDuplicatePrimaryPath(group);
-
-                            return (
-                              <div
-                                key={`${group.group_id}-${index}`}
-                                className="rounded-3xl border border-slate-200 bg-slate-50 p-4"
-                              >
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <div>
-                                    <div className="text-sm font-semibold text-slate-900">
-                                      Duplicate Group {index + 1}
-                                    </div>
-                                    <div className="mt-1 text-xs text-slate-500">
-                                      {group.items_total ?? group.items.length} files · showing {group.items.length} · confidence: {group.confidence}
-                                    </div>
-                                  </div>
-
-                                  <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
-                                    Grouped
-                                  </span>
-                                </div>
-
-                                <div className="mt-3 rounded-2xl bg-white p-3">
-                                  <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400">
-                                    Reason
-                                  </div>
-                                  <div className="mt-2 text-sm text-slate-700">{group.reason}</div>
-                                </div>
-
-                                <div className="mt-4 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3">
-                                  <div className="flex flex-wrap items-center justify-between gap-3">
-                                    <div>
-                                      <div className="text-sm font-semibold text-sky-900">
-                                        Resolution
-                                      </div>
-                                      <div className="mt-1 text-xs text-sky-700">
-                                        Select one file to keep active, then archive the other copies.
-                                      </div>
-                                    </div>
-
-                                    <button
-                                      onClick={() => handleArchiveDuplicateGroup(group)}
-                                      disabled={
-                                        busyDuplicateGroupId === group.group_id ||
-                                        isBulkActing ||
-                                        isScanning ||
-                                        group.items.length < 2
-                                      }
-                                      className="rounded-full bg-sky-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-                                    >
-                                      {busyDuplicateGroupId === group.group_id
-                                        ? 'Resolving…'
-                                        : `Archive shown copies (${Math.max(group.items.length - 1, 0)})`}
-                                    </button>
-                                  </div>
-                                </div>
-
-                                {group.hidden_items_count && group.hidden_items_count > 0 ? (
-                                  <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
-                                    {group.hidden_items_count} additional duplicate copies are hidden in this bounded view.
-                                    DTM is showing a representative subset so one duplicate family does not dominate the workspace.
-                                  </div>
+                            {sortedReviewFiles.length > 8 ? (
+                              <div className="mt-4 flex gap-3">
+                                {reviewVisibleCount < sortedReviewFiles.length ? (
+                                  <button
+                                    onClick={() =>
+                                      setReviewVisibleCount((prev) =>
+                                        Math.min(prev + 8, sortedReviewFiles.length)
+                                      )
+                                    }
+                                    className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
+                                  >
+                                    Show more
+                                  </button>
                                 ) : null}
 
-                                <div className="mt-4 space-y-3">
-                                  {group.items.map((item, itemIndex) => {
-                                    const likelyPrimary = isLikelyPrimaryDuplicateItem(item, itemIndex);
-                                    const isSelectedPrimary = item.path === selectedPrimaryPath;
+                                {reviewVisibleCount > 8 ? (
+                                  <button
+                                    onClick={() => setReviewVisibleCount(8)}
+                                    className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                                  >
+                                    Show less
+                                  </button>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </div>
+                        )}
+                      </SectionCard>
 
-                                    return (
-                                      <div
-                                        key={item.path}
-                                        className={`rounded-2xl p-3 ring-1 ${
-                                          isSelectedPrimary
-                                            ? 'bg-emerald-50 ring-emerald-200'
-                                            : 'bg-white ring-slate-200'
-                                        }`}
-                                      >
-                                        <div className="flex flex-wrap items-center gap-2">
-                                          <div className="text-sm font-semibold text-slate-900">
-                                            {item.name}
-                                          </div>
+                      <SectionCard
+                        title="Archive Queue"
+                        subtitle="Ranked files that appear worth keeping, but not keeping active in the current workspace."
+                      >
+                        {activeQueueFilter && (
+                          <div className="mb-2 text-xs text-sky-700">
+                            Showing results scoped to current focus
+                          </div>
+                        )}
 
-                                          {isSelectedPrimary ? (
-                                            <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-medium text-emerald-800 ring-1 ring-emerald-200">
-                                              Selected primary
-                                            </span>
-                                          ) : likelyPrimary ? (
-                                            <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-200">
-                                              Likely primary
-                                            </span>
-                                          ) : (
-                                            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
-                                              Likely copy
-                                            </span>
-                                          )}
+                        {sortedArchiveCandidates.length > 0 ? ( 
+                          <div className="mb-3 text-xs text-slate-500">
+                            Showing top {visibleArchiveCandidates.length} ranked archive candidates
+                            {activeQueueFilter
+                              ? ` matching current focus from ${filteredArchiveCandidates.length}`
+                              : ` from ~${adjustedTotals.archive.toLocaleString()} estimated remaining`}
+                          </div>
+                        ) : null}
+                        
+                        {visibleArchiveCandidates.length > 0 ? ( 
+                          <div className="mb-4 flex flex-wrap gap-3">
+                            <button
+                              onClick={handleBulkMoveToArchive}
+                              disabled={
+                                isBulkActing ||
+                                isScanning ||
+                                visibleArchiveCandidates.length === 0
+                              }
+                              className="rounded-full bg-sky-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                            >
+                              {isBulkActing && bulkProgress?.action === 'archive'
+                                ? 'Bulk archiving…'
+                                : `Apply archive to visible ${visibleArchiveCandidates.length} to Archive`}
+                            </button>
+                          </div>
+                        ) : null}
+
+                        {sortedArchiveCandidates.length > 0 ? (
+                          <QueueSortControls
+                            sortKey={archiveSortKey}
+                            sortDirection={archiveSortDirection}
+                            onSortKeyChange={setArchiveSortKey}
+                            onSortDirectionChange={setArchiveSortDirection}
+                            disabled={isBulkActing}
+                          />
+                        ) : null}
+
+                        {scanData.archive_candidates.length === 0 ? (
+                          <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
+                            No archive candidates detected in this scan.
+                          </div>
+                        ) : (
+                          <div className="space-y-3">
+                            {visibleArchiveCandidates.map((file) => (
+                              <QueueFileCard
+                                key={file.path}
+                                file={file}
+                                tone="archive"
+                                actionLabel="Move to Archive"
+                                busyLabel="Archiving…"
+                                onAction={async (filePath) => {
+                                  await handleMoveToArchive(filePath);
+                                  reconcileInsightsAfterSingleAction(file, 'archive');
+                                }}
+                                onKeep={async (filePath) => {
+                                  await handleKeepFile(filePath);
+                                  reconcileInsightsAfterSingleAction(file, 'review');
+                                }}
+                                onRemove={async (filePath) => {
+                                  await handleMoveToTrash(filePath);
+                                  reconcileInsightsAfterSingleAction(file, 'remove');
+                                }}
+                                recommendedAction="archive"
+                                isBusy={busyPath === file.path || isBulkActing}
+                              />
+                            ))}
+
+                            {sortedArchiveCandidates.length > 8 ? (
+                              <div className="mt-4 flex gap-3">
+                                {archiveVisibleCount < sortedArchiveCandidates.length ? (
+                                  <button
+                                    onClick={() =>
+                                      setArchiveVisibleCount((prev) =>
+                                        Math.min(prev + 8, sortedArchiveCandidates.length)
+                                      )
+                                    }
+                                    className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
+                                  >
+                                    Show more
+                                  </button>
+                                ) : null}
+
+                                {archiveVisibleCount > 8 ? (
+                                  <button
+                                    onClick={() => setArchiveVisibleCount(8)}
+                                    className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                                  >
+                                    Show less
+                                  </button>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </div>
+                        )}
+                      </SectionCard>
+
+                      <SectionCard
+                        title="Remove Queue"
+                        subtitle="Ranked files that appear disposable, temporary, or low-value. DTM moves these to Trash, not permanent deletion."
+                      >
+                        {activeQueueFilter && (
+                          <div className="mb-2 text-xs text-sky-700">
+                            Showing results scoped to current focus
+                          </div>
+                        )}
+
+                        {sortedRemoveCandidates.length > 0 ? (
+                          <div className="mb-3 text-xs text-slate-500">
+                            Showing top {visibleRemoveCandidates.length} ranked remove candidates
+                            {activeQueueFilter
+                              ? ` matching current focus from ${filteredRemoveCandidates.length}`
+                              : ` from ~${adjustedTotals.remove.toLocaleString()} estimated remaining`}
+                          </div>
+                        ) : null}
+
+                        {visibleRemoveCandidates.length > 0 ? (
+                          <div className="mb-4 flex flex-wrap gap-3">
+                            <button
+                              onClick={handleBulkMoveToTrash}
+                              disabled={
+                                isBulkActing ||
+                                isScanning ||
+                                visibleRemoveCandidates.length === 0
+                              }
+                              className="rounded-full bg-rose-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-rose-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                            >
+                              {isBulkActing && bulkProgress?.action === 'remove'
+                                ? 'Bulk removing…'
+                                : `Move visible ${visibleRemoveCandidates.length} to Trash`}
+                            </button>
+                          </div>
+                        ) : null}
+
+                        {sortedRemoveCandidates.length > 0 ? (
+                          <QueueSortControls
+                            sortKey={removeSortKey}
+                            sortDirection={removeSortDirection}
+                            onSortKeyChange={setRemoveSortKey}
+                            onSortDirectionChange={setRemoveSortDirection}
+                            disabled={isBulkActing}
+                          />
+                        ) : null}
+
+                        {scanData.remove_candidates.length === 0 ? (
+                          <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
+                            No remove candidates detected in this scan.
+                          </div>
+                        ) : (
+                          <div className="space-y-3">
+                            {visibleRemoveCandidates.map((file) => (
+                              <QueueFileCard
+                                key={file.path}
+                                file={file}
+                                tone="remove"
+                                actionLabel="Move to Trash"
+                                busyLabel="Removing…"
+                                onAction={async (filePath) => {
+                                  await handleMoveToTrash(filePath);
+                                  reconcileInsightsAfterSingleAction(file, 'remove');
+                                }}
+                                onKeep={async (filePath) => {
+                                  await handleKeepFile(filePath);
+                                  reconcileInsightsAfterSingleAction(file, 'review');
+                                }}
+                                onArchive={async (filePath) => {
+                                  await handleMoveToArchive(filePath);
+                                  reconcileInsightsAfterSingleAction(file, 'archive');
+                                }}
+                                recommendedAction="remove"
+                                isBusy={busyPath === file.path || isBulkActing}
+                              />
+                            ))}
+
+                            {sortedRemoveCandidates.length > 8 ? (
+                              <div className="mt-4 flex gap-3">
+                                {removeVisibleCount < sortedRemoveCandidates.length ? (
+                                  <button
+                                    onClick={() =>
+                                      setRemoveVisibleCount((prev) =>
+                                        Math.min(prev + 8, sortedRemoveCandidates.length)
+                                      )
+                                    }
+                                    className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
+                                  >
+                                    Show more
+                                  </button>
+                                ) : null}
+
+                                {removeVisibleCount > 8 ? (
+                                  <button
+                                    onClick={() => setRemoveVisibleCount(8)}
+                                    className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                                  >
+                                    Show less
+                                  </button>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </div>
+                        )}
+                      </SectionCard>
+
+                      <SectionCard
+                        title="Duplicate Queue"
+                        subtitle="Grouped file families that appear to contain duplicate copies."
+                      >
+                        {activeQueueFilter && (
+                          <div className="mb-2 text-xs text-sky-700">
+                            Showing results scoped to current focus
+                          </div>
+                        )}
+
+                        {visibleDuplicates.length > 0 ? (
+                          <div className="mb-3 text-xs text-slate-500">
+                            Showing {visibleDuplicates.length} of {scanData.duplicates_total} duplicate groups
+                          </div>
+                        ) : null}
+
+                        {scanData.duplicates.length === 0 ? (
+                          <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
+                            No duplicate groups detected in this scan.
+                          </div>
+                        ) : (
+                          <div className="space-y-4">
+                            {visibleDuplicates.map((group, index) => {
+                              const selectedPrimaryPath = getSelectedDuplicatePrimaryPath(group);
+
+                              return (
+                                <div
+                                  key={`${group.group_id}-${index}`}
+                                  className="rounded-3xl border border-slate-200 bg-slate-50 p-4"
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                      <div className="text-sm font-semibold text-slate-900">
+                                        Duplicate Group {index + 1}
+                                      </div>
+                                      <div className="mt-1 text-xs text-slate-500">
+                                        {group.items_total ?? group.items.length} files · showing {group.items.length} · confidence: {group.confidence}
+                                      </div>
+                                    </div>
+
+                                    <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
+                                      Grouped
+                                    </span>
+                                  </div>
+
+                                  <div className="mt-3 rounded-2xl bg-white p-3">
+                                    <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400">
+                                      Reason
+                                    </div>
+                                    <div className="mt-2 text-sm text-slate-700">{group.reason}</div>
+                                  </div>
+
+                                  <div className="mt-4 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3">
+                                    <div className="flex flex-wrap items-center justify-between gap-3">
+                                      <div>
+                                        <div className="text-sm font-semibold text-sky-900">
+                                          Resolution
                                         </div>
-
-                                        <div className="mt-2 break-all text-xs text-slate-600">
-                                          {item.path}
-                                        </div>
-
-                                        <div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-500">
-                                          <span>Size: {item.size.toLocaleString()} bytes</span>
-                                          <span>Age: {item.age_days} days</span>
-                                          <span>Type: {item.ext}</span>
-                                        </div>
-
-                                        <div className="mt-4 flex flex-wrap gap-3">
-                                          <button
-                                            onClick={() => setDuplicatePrimarySelection(group.group_id, item.path)}
-                                            disabled={busyDuplicateGroupId === group.group_id || isBulkActing || isScanning}
-                                            className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
-                                              isSelectedPrimary
-                                                ? 'bg-emerald-700 text-white'
-                                                : 'bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50'
-                                            } disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500`}
-                                          >
-                                            {isSelectedPrimary ? 'Keeping this one' : 'Keep this one'}
-                                          </button>
-
-                                          {!isSelectedPrimary ? (
-                                            <button
-                                              onClick={() => handleArchiveDuplicate(item.path)}
-                                              disabled={
-                                                busyPath === item.path ||
-                                                busyDuplicateGroupId === group.group_id ||
-                                                isBulkActing ||
-                                                isScanning
-                                              }
-                                              className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
-                                                busyPath === item.path
-                                                  ? 'cursor-not-allowed bg-slate-200 text-slate-500'
-                                                  : 'bg-sky-900 text-white hover:bg-sky-700'
-                                              }`}
-                                            >
-                                              {busyPath === item.path ? 'Archiving…' : 'Archive This Copy'}
-                                            </button>
-                                          ) : null}
+                                        <div className="mt-1 text-xs text-sky-700">
+                                          Select one file to keep active, then archive the other shown copies.
                                         </div>
                                       </div>
-                                    );
-                                  })}
+
+                                      <button
+                                        onClick={() => handleArchiveDuplicateGroup(group)}
+                                        disabled={
+                                          busyDuplicateGroupId === group.group_id ||
+                                          isBulkActing ||
+                                          isScanning ||
+                                          group.items.length < 2
+                                        }
+                                        className="rounded-full bg-sky-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                                      >
+                                        {busyDuplicateGroupId === group.group_id
+                                          ? 'Resolving…'
+                                          : `Archive shown copies (${Math.max(group.items.length - 1, 0)})`}
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  {group.hidden_items_count && group.hidden_items_count > 0 ? (
+                                    <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+                                      {group.hidden_items_count} additional duplicate copies are hidden in this bounded view.
+                                      DTM is showing a representative subset so one duplicate family does not dominate the workspace.
+                                    </div>
+                                  ) : null}
+
+                                  <div className="mt-4 space-y-3">
+                                    {group.items.map((item, itemIndex) => {
+                                      const likelyPrimary = isLikelyPrimaryDuplicateItem(item, itemIndex);
+                                      const isSelectedPrimary = item.path === selectedPrimaryPath;
+
+                                      return (
+                                        <div
+                                          key={item.path}
+                                          className={`rounded-2xl p-3 ring-1 ${
+                                            isSelectedPrimary
+                                              ? 'bg-emerald-50 ring-emerald-200'
+                                              : 'bg-white ring-slate-200'
+                                          }`}
+                                        >
+                                          <div className="flex flex-wrap items-center gap-2">
+                                            <div className="text-sm font-semibold text-slate-900">
+                                              {item.name}
+                                            </div>
+
+                                            {isSelectedPrimary ? (
+                                              <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-medium text-emerald-800 ring-1 ring-emerald-200">
+                                                Selected primary
+                                              </span>
+                                            ) : likelyPrimary ? (
+                                              <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-200">
+                                                Likely primary
+                                              </span>
+                                            ) : (
+                                              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
+                                                Likely copy
+                                              </span>
+                                            )}
+                                          </div>
+
+                                          <div className="mt-2 break-all text-xs text-slate-600">
+                                            {item.path}
+                                          </div>
+
+                                          <div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-500">
+                                            <span>Size: {item.size.toLocaleString()} bytes</span>
+                                            <span>Age: {item.age_days} days</span>
+                                            <span>Type: {item.ext}</span>
+                                          </div>
+
+                                          <div className="mt-4 flex flex-wrap gap-3">
+                                            <button
+                                              onClick={() => setDuplicatePrimarySelection(group.group_id, item.path)}
+                                              disabled={busyDuplicateGroupId === group.group_id || isBulkActing || isScanning}
+                                              className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
+                                                isSelectedPrimary
+                                                  ? 'bg-emerald-700 text-white'
+                                                  : 'bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50'
+                                              } disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500`}
+                                            >
+                                              {isSelectedPrimary ? 'Keeping this one' : 'Keep this one'}
+                                            </button>
+
+                                            {!isSelectedPrimary ? (
+                                              <button
+                                                onClick={() => handleArchiveDuplicate(item.path)}
+                                                disabled={
+                                                  busyPath === item.path ||
+                                                  busyDuplicateGroupId === group.group_id ||
+                                                  isBulkActing ||
+                                                  isScanning
+                                                }
+                                                className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
+                                                  busyPath === item.path
+                                                    ? 'cursor-not-allowed bg-slate-200 text-slate-500'
+                                                    : 'bg-sky-900 text-white hover:bg-sky-700'
+                                                }`}
+                                              >
+                                                {busyPath === item.path ? 'Archiving…' : 'Archive This Copy'}
+                                              </button>
+                                            ) : null}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
                                 </div>
+                              );
+                            })}
+
+                            {scanData.duplicates.length > 8 ? (
+                              <div className="mt-4 flex gap-3">
+                                {duplicateVisibleCount < scanData.duplicates.length ? (
+                                  <button
+                                    onClick={() =>
+                                      setDuplicateVisibleCount((prev) =>
+                                        Math.min(prev + 8, scanData.duplicates.length)
+                                      )
+                                    }
+                                    className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
+                                  >
+                                    Show more
+                                  </button>
+                                ) : null}
+
+                                {duplicateVisibleCount > 8 ? (
+                                  <button
+                                    onClick={() => setDuplicateVisibleCount(8)}
+                                    className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                                  >
+                                    Show less
+                                  </button>
+                                ) : null}
                               </div>
-                            );
-                          })}
-
-                          {scanData.duplicates.length > 8 ? (
-                            <div className="mt-4 flex gap-3">
-                              {duplicateVisibleCount < scanData.duplicates.length ? (
-                                <button
-                                  onClick={() =>
-                                    setDuplicateVisibleCount((prev) =>
-                                      Math.min(prev + 8, scanData.duplicates.length)
-                                    )
-                                  }
-                                  className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
-                                >
-                                  Show more
-                                </button>
-                              ) : null}
-
-                              {duplicateVisibleCount > 8 ? (
-                                <button
-                                  onClick={() => setDuplicateVisibleCount(8)}
-                                  className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
-                                >
-                                  Show less
-                                </button>
-                              ) : null}
-                            </div>
-                          ) : null}
-                        </div>
-                      )}
-                    </SectionCard>
-                  </section>
-                </div>
-              </section>              
+                            ) : null}
+                          </div>
+                        )}
+                      </SectionCard>
+                    </section>
+                  </div>
+                </section>  
+              </section>
 
               <section className="mx-auto flex min-h-screen w-full max-w-[1700px] flex-col px-5 py-6 md:px-8 lg:px-10">
                 {showSystemFiles ? (
@@ -2687,27 +3296,26 @@ function App() {
                   </SectionCard>
                   ) : (
                 <div />
-              )}
-
-        </section>
+                )}
+          </section>
           </>
-          ) : !isScanning ? (
-            <section className="rounded-[2rem] border border-slate-200 bg-white p-10 shadow-sm">
-              <div className="max-w-2xl">
-                <p className="text-sm font-medium uppercase tracking-[0.18em] text-slate-400">
-                  Ready
-                </p>
-                <h2 className="mt-3 text-3xl font-semibold tracking-tight text-slate-900">
-                  Run a scan to populate the maintenance dashboard
-                </h2>
-                <p className="mt-3 text-sm leading-7 text-slate-500">
-                  Start with your test folder for rapid iteration, then switch to Desktop when
-                  you want broader validation. The dashboard will keep evolving around these
-                  structured result states.
-                </p>
-              </div>
-            </section>
-          ) : null}
+            ) : !isScanning ? (
+              <section className="rounded-[2rem] border border-slate-200 bg-white p-10 shadow-sm">
+                <div className="max-w-2xl">
+                  <p className="text-sm font-medium uppercase tracking-[0.18em] text-slate-400">
+                    Ready
+                  </p>
+                  <h2 className="mt-3 text-3xl font-semibold tracking-tight text-slate-900">
+                    Run a scan to populate the maintenance dashboard
+                  </h2>
+                  <p className="mt-3 text-sm leading-7 text-slate-500">
+                    Start with your test folder for rapid iteration, then switch to Desktop when
+                    you want broader validation. The dashboard will keep evolving around these
+                    structured result states.
+                  </p>
+                </div>
+              </section>
+            ) : null}
         </main>
       </div>
     </div>

@@ -5,7 +5,14 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional
 
-APP_HISTORY_DIR = Path.home() / "Desktop" / "data"
+def get_app_data_dir() -> Path:
+    if len(sys.argv) >= 3 and sys.argv[1] == "--app-data":
+        return Path(sys.argv[2]).expanduser().resolve()
+
+    return Path.home() / ".dtm"
+
+
+APP_HISTORY_DIR = get_app_data_dir()
 APP_HISTORY_FILE = APP_HISTORY_DIR / "action-history.json"
 MAX_HISTORY_ITEMS = 1000
 
@@ -72,17 +79,22 @@ def get_action_history(limit=None) -> list:
 
 
 if __name__ == "__main__":
+    args = sys.argv[1:]
+
+    if len(args) >= 2 and args[0] == "--app-data":
+        args = args[2:]
+
     limit = 20
     command = "read"
 
-    if len(sys.argv) >= 2:
+    if len(args) >= 1:
         try:
-            limit = int(sys.argv[1])
+            limit = int(args[0])
         except ValueError:
-            command = sys.argv[1]
+            command = args[0]
 
-    if len(sys.argv) >= 3:
-        command = sys.argv[2]
+    if len(args) >= 2:
+        command = args[1]
 
     if command == "read":
         print(json.dumps(get_action_history(limit)))

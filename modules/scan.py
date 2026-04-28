@@ -6,7 +6,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_TARGET = os.path.expanduser("~/Desktop")
+DEFAULT_TARGET = str(Path.home())
 
 # -----------------------------
 # Safety / scale configuration
@@ -1832,7 +1832,7 @@ def scan_folder(target_dir: str) -> dict:
                 age_days = get_age_days(stat.st_mtime)
                 ext = os.path.splitext(filename)[1].lower()
                 entry_ext = ext or "no_ext"
-                normalized_path = full_path.lower()
+                normalized_path = full_path.replace("\\", "/").lower()
 
                 files_scanned += 1
 

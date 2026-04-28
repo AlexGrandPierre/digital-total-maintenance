@@ -5,6 +5,10 @@ from pathlib import Path
 from datetime import datetime, timezone
 from action_history import append_action_history
 
+def strip_app_data_args(args: list[str]) -> list[str]:
+    if len(args) >= 2 and args[0] == "--app-data":
+        return args[2:]
+    return args
 
 def restore_from_history(entry: dict) -> dict:
     action = entry.get("action")
@@ -91,9 +95,10 @@ def restore_from_history(entry: dict) -> dict:
         "history_entry": history_entry,
     }
 
-
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
+    args = strip_app_data_args(sys.argv[1:])
+
+    if len(args) < 1:
         print(json.dumps({
             "success": False,
             "action": "restore",
@@ -102,7 +107,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     try:
-        entry = json.loads(sys.argv[1])
+        entry = json.loads(args[0])
     except Exception as e:
         print(json.dumps({
             "success": False,
