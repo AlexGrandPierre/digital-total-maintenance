@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useReducer, useState } from 'react';
 import Header from './components/Header';
 import ScanButton from './components/ScanButton';
 import InfoPanel from './components/InfoPanel';
@@ -26,6 +26,133 @@ type BatchPreview = {
   items: ClassifiedFile[];
   total: number;
 } | null;
+
+type SourceQueue = 'review' | 'archive' | 'remove' | 'duplicate';
+
+type SessionFileAction = 'keep' | 'archive' | 'remove';
+
+type SessionState = {
+  resolvedPaths: string[];
+  reviewResolved: number;
+  archiveResolved: number;
+  removeResolved: number;
+  duplicateGroupsResolved: number;
+  resolvedDuplicateGroupIds: string[];
+  filesArchived: number;
+  filesRemoved: number;
+  filesKept: number;
+  needsRescan: boolean;
+};
+
+type SessionAction =
+  | {
+      type: 'FILE_ACTION_SUCCEEDED';
+      sourceQueue: SourceQueue;
+      fileAction: SessionFileAction;
+      filePath: string;
+    }
+  | {
+      type: 'DUPLICATE_GROUP_RESOLVED';
+      groupId: string;
+    }
+  | {
+      type: 'RESET_AFTER_RESCAN';
+    };
+
+type ActiveQueueFilter = Exclude<QueueFilter, null>;
+
+type ActionHistoryEntry = {
+  id: string;
+  action: string;
+  source_path: string;
+  destination_path?: string;
+  status: string;
+  timestamp: string;
+  mode: 'single' | 'bulk';
+  reverts_history_id?: string;
+};
+
+const initialSessionState: SessionState = {
+  resolvedPaths: [],
+  reviewResolved: 0,
+  archiveResolved: 0,
+  removeResolved: 0,
+  duplicateGroupsResolved: 0,
+  resolvedDuplicateGroupIds: [],
+  filesArchived: 0,
+  filesRemoved: 0,
+  filesKept: 0,
+  needsRescan: false,
+};
+
+function sessionReducer(state: SessionState, action: SessionAction): SessionState {
+  if (action.type === 'RESET_AFTER_RESCAN') {
+    return initialSessionState;
+  }
+
+  if (action.type === 'FILE_ACTION_SUCCEEDED') {
+    const alreadyResolved = state.resolvedPaths.includes(action.filePath);
+
+    return {
+      ...state,
+
+      resolvedPaths: alreadyResolved
+        ? state.resolvedPaths
+        : [...state.resolvedPaths, action.filePath],
+
+      reviewResolved:
+        !alreadyResolved && action.sourceQueue === 'review'
+          ? state.reviewResolved + 1
+          : state.reviewResolved,
+
+      archiveResolved:
+        !alreadyResolved && action.sourceQueue === 'archive'
+          ? state.archiveResolved + 1
+          : state.archiveResolved,
+
+      removeResolved:
+        !alreadyResolved && action.sourceQueue === 'remove'
+          ? state.removeResolved + 1
+          : state.removeResolved,
+
+      duplicateGroupsResolved:
+        !alreadyResolved && action.sourceQueue === 'duplicate'
+          ? state.duplicateGroupsResolved + 1
+          : state.duplicateGroupsResolved,
+
+      filesArchived:
+        !alreadyResolved && action.fileAction === 'archive'
+          ? state.filesArchived + 1
+          : state.filesArchived,
+
+      filesRemoved:
+        !alreadyResolved && action.fileAction === 'remove'
+          ? state.filesRemoved + 1
+          : state.filesRemoved,
+
+      filesKept:
+        !alreadyResolved && action.fileAction === 'keep'
+          ? state.filesKept + 1
+          : state.filesKept,
+
+      needsRescan: true,
+    };
+  }
+
+  if (action.type === 'DUPLICATE_GROUP_RESOLVED') {
+    const alreadyResolved = state.resolvedDuplicateGroupIds.includes(action.groupId);
+  
+    return {
+      ...state,
+      resolvedDuplicateGroupIds: alreadyResolved
+        ? state.resolvedDuplicateGroupIds
+        : [...state.resolvedDuplicateGroupIds, action.groupId],
+      needsRescan: true,
+    };
+  }
+
+  return state;
+}
 
 function StatCard({
   label,
@@ -98,14 +225,12 @@ function InsightList({
   entries,
   emptyMessage,
   onSelect,
-  getActions,
   activeFilter,
   getMatchCount,
 }: {
   entries: Array<{ label: string; count: number }>;
   emptyMessage: string;
   onSelect?: (entry: { label: string; count: number }) => void;
-  getActions?: (entry: { label: string; count: number }) => React.ReactNode;
   activeFilter?: QueueFilter;
   getMatchCount?: (entry: { label: string; count: number }) => number;
 }) {
@@ -144,13 +269,13 @@ function InsightList({
                 </div>
 
                 <div className="mt-1 text-xs leading-5 text-slate-600">
-                  {entry.count.toLocaleString()} total pattern match
-                  {entry.count === 1 ? '' : 'es'}
-                  {getMatchCount ? (
-                    <>
-                      {' '}· {matchCount.toLocaleString()} in current decision queue
-                    </>
-                  ) : null}
+                {entry.count.toLocaleString()} total pattern match
+                {entry.count === 1 ? '' : 'es'}
+                {getMatchCount ? (
+                  <>
+                    {' '}· {matchCount.toLocaleString()} visible through queue focus
+                  </>
+                ) : null}
                 </div>
 
                 <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -165,13 +290,11 @@ function InsightList({
                     >
                       {isActive ? 'Inspecting' : 'Inspect'}
                     </button>
-                  ) : (
-                    <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-400">
-                      No queue matches
-                    </span>
+                    ) : (
+                      <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-400">
+                        No queue matches
+                      </span>
                   )}
-
-                  {getActions ? getActions(entry) : null}
                 </div>
               </div>
             </div>
@@ -319,6 +442,11 @@ function applyQueueFilter(items: ClassifiedFile[], filter: QueueFilter) {
   });
 }
 
+function removeResolvedFiles(items: ClassifiedFile[], resolvedPaths: string[]) {
+  const resolved = new Set(resolvedPaths);
+  return items.filter((item) => !resolved.has(item.path));
+}
+
 function getConfidenceBreakdown(items: ClassifiedFile[]) {
   const counts = {
     high: 0,
@@ -407,8 +535,6 @@ function App() {
 
   const [historyFilter, setHistoryFilter] = useState<'undoable' | 'all' | 'restored'>('undoable');
 
-  const [needsRescan, setNeedsRescan] = useState(false);
-
   const [duplicatePrimarySelections, setDuplicatePrimarySelections] = useState<Record<string, string>>({});
   const [busyDuplicateGroupId, setBusyDuplicateGroupId] = useState<string | null>(null);
 
@@ -423,18 +549,10 @@ function App() {
     total: number;
   } | null>(null);
 
-  const [sessionStats, setSessionStats] = useState({
-    archived: 0,
-    removed: 0,
-    kept: 0,
-  });
-
-  const incrementSessionStat = (type: 'archived' | 'removed' | 'kept') => {
-    setSessionStats((prev) => ({
-      ...prev,
-      [type]: prev[type] + 1,
-    }));
-  };
+  const [sessionState, dispatchSession] = useReducer(
+    sessionReducer,
+    initialSessionState
+  );
 
   const [selectedBatchPaths, setSelectedBatchPaths] = useState<Set<string>>(new Set());
 
@@ -456,6 +574,8 @@ function App() {
       setDuplicateVisibleCount(8);
 
       loadActionHistory();
+
+      dispatchSession({ type: 'RESET_AFTER_RESCAN' });
 
       try {
         const parsed = JSON.parse(output);
@@ -524,18 +644,30 @@ function App() {
 
   const sortedReviewFiles = useMemo(() => {
     if (!scanData) return [];
-    return sortQueue(scanData.review_files, reviewSortKey, reviewSortDirection);
-  }, [scanData, reviewSortKey, reviewSortDirection]);
+    return sortQueue(
+      removeResolvedFiles(scanData.review_files, sessionState.resolvedPaths),
+      reviewSortKey,
+      reviewSortDirection
+    );
+  }, [scanData, reviewSortKey, reviewSortDirection, sessionState.resolvedPaths]);
   
   const sortedArchiveCandidates = useMemo(() => {
     if (!scanData) return [];
-    return sortQueue(scanData.archive_candidates, archiveSortKey, archiveSortDirection);
-  }, [scanData, archiveSortKey, archiveSortDirection]);
+    return sortQueue(
+      removeResolvedFiles(scanData.archive_candidates, sessionState.resolvedPaths),
+      archiveSortKey,
+      archiveSortDirection
+    );
+  }, [scanData, archiveSortKey, archiveSortDirection, sessionState.resolvedPaths]);
   
   const sortedRemoveCandidates = useMemo(() => {
     if (!scanData) return [];
-    return sortQueue(scanData.remove_candidates, removeSortKey, removeSortDirection);
-  }, [scanData, removeSortKey, removeSortDirection]);
+    return sortQueue(
+      removeResolvedFiles(scanData.remove_candidates, sessionState.resolvedPaths),
+      removeSortKey,
+      removeSortDirection
+    );
+  }, [scanData, removeSortKey, removeSortDirection, sessionState.resolvedPaths]);
 
   const reviewPrioritySummary = useMemo(() => {
     if (!scanData) return [];
@@ -578,7 +710,10 @@ function App() {
   const loadActionHistory = async () => {
     try {
       const history = await window.electronAPI?.getActionHistory?.(100);
-      setActionHistory(history || []);
+
+      setActionHistory(
+        Array.isArray(history) ? (history as ActionHistoryEntry[]) : []
+      );
     } catch {
       setActionHistory([]);
     }
@@ -703,7 +838,6 @@ function App() {
 
   const removePathFromQueues = (
     filePath: string,
-    actionType: 'review' | 'archive' | 'remove'
   ) => {
     setScanData((prev) => {
       if (!prev) return prev;
@@ -727,18 +861,6 @@ function App() {
         archive_total: prev.archive_total,
         remove_total: prev.remove_total,
       };
-
-      if (actionType === 'review') {
-        next.review_total = Math.max(0, prev.review_total - 1);
-      }
-
-      if (actionType === 'archive') {
-        next.archive_total = Math.max(0, prev.archive_total - 1);
-      }
-
-      if (actionType === 'remove') {
-        next.remove_total = Math.max(0, prev.remove_total - 1);
-      }
 
       return next;
     });
@@ -1066,11 +1188,17 @@ function App() {
       if (result.success) {
         removeDuplicateFromQueue(duplicatePath);
         await loadActionHistory();
-        setNeedsRescan(true);
 
         setActionStatus({
           tone: 'success',
           message: `${result.message} Refresh scan when you want to reconcile duplicate groups.`,
+        });
+
+        dispatchSession({
+          type: 'FILE_ACTION_SUCCEEDED',
+          sourceQueue: 'duplicate',
+          fileAction: 'archive',
+          filePath: duplicatePath,
         });
       } else {
         setActionStatus({
@@ -1117,6 +1245,13 @@ function App() {
         if (result.success) {
           successCount += 1;
           archivedPaths.push(item.path);
+        
+          dispatchSession({
+            type: 'FILE_ACTION_SUCCEEDED',
+            sourceQueue: 'duplicate',
+            fileAction: 'archive',
+            filePath: item.path,
+          });
         } else {
           failureCount += 1;
         }
@@ -1127,8 +1262,13 @@ function App() {
 
     if (archivedPaths.length > 0) {
       removeDuplicateItemsFromQueue(archivedPaths);
+    
+      dispatchSession({
+        type: 'DUPLICATE_GROUP_RESOLVED',
+        groupId: group.group_id,
+      });
+    
       await loadActionHistory();
-      setNeedsRescan(true);
     }
 
     if (failureCount === 0) {
@@ -1166,7 +1306,6 @@ function App() {
         });
 
         await loadActionHistory();
-        setNeedsRescan(true);
       } else {
         console.error('Restore result:', result);
 
@@ -1196,12 +1335,6 @@ function App() {
     const archive = scanData.archive_total;
     const remove = scanData.remove_total;
     const oldFiles = scanData.age_buckets['>180d'] || 0;
-
-    const adjustedTotals = {
-      review: scanData.review_total - sessionStats.kept,
-      archive: scanData.archive_total - sessionStats.archived,
-      remove: scanData.remove_total - sessionStats.removed,
-    };
   
     let summary = '';
   
@@ -1282,18 +1415,39 @@ function App() {
   const adjustedTotals = useMemo(() => {
     if (!scanData) {
       return {
+        totalFiles: 0,
         review: 0,
         archive: 0,
         remove: 0,
+        duplicateGroups: 0,
+        sessionActions: 0,
       };
     }
   
+    const sessionActions =
+      sessionState.filesArchived +
+      sessionState.filesRemoved +
+      sessionState.filesKept;
+  
     return {
-      review: Math.max(0, scanData.review_total - sessionStats.kept - sessionStats.archived - sessionStats.removed),
-      archive: Math.max(0, scanData.archive_total - sessionStats.archived),
-      remove: Math.max(0, scanData.remove_total - sessionStats.removed),
+      totalFiles: Math.max(
+        0,
+        scanData.total_files -
+          sessionState.filesArchived -
+          sessionState.filesRemoved
+      ),
+  
+      review: Math.max(0, scanData.review_total - sessionState.reviewResolved),
+      archive: Math.max(0, scanData.archive_total - sessionState.archiveResolved),
+      remove: Math.max(0, scanData.remove_total - sessionState.removeResolved),
+  
+      duplicateGroups: Math.max(
+        0,
+        scanData.duplicates_total - sessionState.resolvedDuplicateGroupIds.length
+      ),
+      sessionActions,
     };
-  }, [scanData, sessionStats]);
+  }, [scanData, sessionState]);
 
   const getCurrentScanPayload = () => ({
     preset: scanPreset,
@@ -1353,20 +1507,11 @@ function App() {
     const result = await invokeAction(actionType, filePath, mode);
 
     if (result?.success) {
-      removePathFromQueues(filePath, actionType);
-    
-      if (actionType === 'archive') {
-        incrementSessionStat('archived');
-      }
-    
-      if (actionType === 'remove') {
-        incrementSessionStat('removed');
-      }
+      removePathFromQueues(filePath);
     
       await loadActionHistory();
     
       if (rescanAfterSuccess) {
-        setNeedsRescan(true);
       }
     
       return {
@@ -1388,38 +1533,51 @@ function App() {
   };
 
   const handleBulkQueueAction = async (
+    sourceQueue: SourceQueue,
     actionType: 'review' | 'archive' | 'remove',
     files: ClassifiedFile[]
   ) => {
     if (isBulkActing || isScanning || files.length === 0) {
       return;
     }
-
+  
     setIsBulkActing(true);
     setBusyPath(null);
     setActionStatus(null);
-
+  
     let successCount = 0;
     let failureCount = 0;
-
+  
     for (let index = 0; index < files.length; index += 1) {
       const file = files[index];
-
+  
       setBulkProgress({
         action: actionType,
         current: index + 1,
         total: files.length,
         currentFileName: file.name,
       });
-
+  
       try {
         const result = await performQueueAction(actionType, file.path, {
           rescanAfterSuccess: false,
           mode: 'bulk',
         });
-
+  
         if (result.success) {
           successCount += 1;
+  
+          dispatchSession({
+            type: 'FILE_ACTION_SUCCEEDED',
+            sourceQueue,
+            fileAction:
+              actionType === 'archive'
+                ? 'archive'
+                : actionType === 'remove'
+                ? 'remove'
+                : 'keep',
+            filePath: file.path,
+          });
         } else {
           failureCount += 1;
         }
@@ -1427,21 +1585,17 @@ function App() {
         failureCount += 1;
       }
     }
-
+  
     setBulkProgress(null);
     setIsBulkActing(false);
-
-    if (successCount > 0) {
-      setNeedsRescan(true);
-    }
-
+  
     const actionLabel =
-  actionType === 'review'
-    ? 'sent to review'
-    : actionType === 'archive'
-    ? 'archived'
-    : 'moved to Trash';
-
+      actionType === 'review'
+        ? 'sent to review'
+        : actionType === 'archive'
+        ? 'archived'
+        : 'moved to Trash';
+  
     if (failureCount === 0) {
       setActionStatus({
         tone: 'success',
@@ -1456,27 +1610,24 @@ function App() {
   };
 
   const handleBulkArchiveFromReview = async () => {
-    await handleBulkQueueAction('archive', visibleReviewFiles);
+    await handleBulkQueueAction('review', 'archive', visibleReviewFiles);
   };
-
+  
   const handleBulkMoveToArchive = async () => {
-    await handleBulkQueueAction('archive', visibleArchiveCandidates);
+    await handleBulkQueueAction('archive', 'archive', visibleArchiveCandidates);
   };
-
+  
   const handleBulkMoveToTrash = async () => {
-    await handleBulkQueueAction('remove', visibleRemoveCandidates);
+    await handleBulkQueueAction('remove', 'remove', visibleRemoveCandidates);
   };
 
   const handleKeepFile = async (filePath: string) => {
-    removePathFromQueues(filePath, 'review');
-    incrementSessionStat('kept');
+    removePathFromQueues(filePath);
   
     setActionStatus({
       tone: 'success',
       message: 'Kept file in place. Refresh scan when you want to reconcile results.',
     });
-  
-    setNeedsRescan(true);
   };
 
   const handleExecuteBatchPreview = async () => {
@@ -1484,28 +1635,76 @@ function App() {
     if (batchPreview.action !== 'archive' && batchPreview.action !== 'remove') return;
     if (isBulkActing || isScanning) return;
   
-    reconcilePatternAfterBatchAction(batchPreview, selectedBatchItems);
+    const actionType = batchPreview.action;
+    const sourceQueue = actionType === 'archive' ? 'archive' : 'remove';
   
+    setIsBulkActing(true);
+    setBusyPath(null);
+    setActionStatus(null);
+  
+    let successCount = 0;
+    let failureCount = 0;
+    const actedItems: ClassifiedFile[] = [];
+  
+    for (let index = 0; index < selectedBatchItems.length; index += 1) {
+      const file = selectedBatchItems[index];
+  
+      setBulkProgress({
+        action: actionType,
+        current: index + 1,
+        total: selectedBatchItems.length,
+        currentFileName: file.name,
+      });
+  
+      try {
+        const result = await performQueueAction(actionType, file.path, {
+          rescanAfterSuccess: false,
+          mode: 'bulk',
+        });
+  
+        if (result.success) {
+          successCount += 1;
+          actedItems.push(file);
+        } else {
+          failureCount += 1;
+        }
+      } catch {
+        failureCount += 1;
+      }
+    }
+  
+    if (actedItems.length > 0) {
+      reconcilePatternAfterBatchAction(batchPreview, actedItems);
+      await loadActionHistory();
+    }
+  
+    setBulkProgress(null);
+    setIsBulkActing(false);
     setBatchPreview(null);
     setSelectedBatchPaths(new Set());
-    
-    setActionStatus({
-      tone: 'success',
-      message: `${
-        batchPreview.action === 'archive'
-          ? 'Archived'
-          : 'Removed'
-      } ${selectedBatchItems.length} selected preview files. Refresh when ready to reconcile.`,
-    });
+  
+    if (failureCount === 0) {
+      setActionStatus({
+        tone: 'success',
+        message: `${
+          actionType === 'archive' ? 'Archived' : 'Moved to Trash'
+        } ${successCount} selected preview file${successCount === 1 ? '' : 's'}. Undo is available in Recent Actions.`,
+      });
+    } else {
+      setActionStatus({
+        tone: 'error',
+        message: `Preview action finished with partial success: ${successCount} succeeded, ${failureCount} failed. Undo is available for successful actions in Recent Actions.`,
+      });
+    }
   };
 
   const buildBatchPreview = (
     items: ClassifiedFile[],
-    filter: Exclude<QueueFilter, null>,
+    filter: ActiveQueueFilter,
     action: 'archive' | 'remove' | 'keep'
   ) => {
     const filtered = applyQueueFilter(items, filter);
-  
+
     return {
       filter,
       action,
@@ -1667,24 +1866,6 @@ function App() {
                       </button>
                     </div>
 
-                    <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
-                      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
-                        Dev Utility
-                      </div>
-
-                      <p className="mt-1 text-xs leading-5 text-amber-800">
-                        Clears local action history only. This does not restore, move, delete, or modify any files.
-                      </p>
-
-                      <button
-                        onClick={handleClearActionHistory}
-                        disabled={isBulkActing || isScanning}
-                        className="mt-3 rounded-full bg-amber-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-                      >
-                        Clear Local History
-                      </button>
-                    </div>
-
                     <div className="mb-3 text-xs text-slate-500">
                       Showing {filteredActionHistory.length} item{filteredActionHistory.length === 1 ? '' : 's'}
                       {historyFilter === 'undoable'
@@ -1782,6 +1963,24 @@ function App() {
                         })}
                       </div>
                     )}
+
+                    <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
+                        Dev Utility
+                      </div>
+
+                      <p className="mt-1 text-xs leading-5 text-amber-800">
+                        Clears local action history only. This does not restore, move, delete, or modify any files.
+                      </p>
+
+                      <button
+                        onClick={handleClearActionHistory}
+                        disabled={isBulkActing || isScanning}
+                        className="mt-3 rounded-full bg-amber-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                      >
+                        Clear Local History
+                      </button>
+                    </div>
                   </SectionCard>
 
                   {scanData && (
@@ -1822,6 +2021,26 @@ function App() {
                     </section>
                     </SectionCard>
                   )}
+
+                  {scanData && scanData.errors_total > 0 ? (
+                    <SectionCard
+                      title="Scan Access Notes"
+                      subtitle="Files DTM could not inspect during this scan."
+                    >
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                        <p>
+                          DTM skipped or could not inspect {scanData.errors_total} file
+                          {scanData.errors_total === 1 ? '' : 's'} during this scan.
+                        </p>
+
+                        <p className="mt-2 text-xs leading-5 text-slate-500">
+                          This is common on active systems. Some files may be temporary,
+                          protected by the operating system, or created and removed while
+                          scanning.
+                        </p>
+                      </div>
+                    </SectionCard>
+                  ) : null}
 
                   <SectionCard
                     title="Action Insights"
@@ -2011,7 +2230,7 @@ function App() {
             </section>
           ) : null}
 
-          {(sessionStats.archived > 0 || sessionStats.removed > 0 || sessionStats.kept > 0) ? (
+          {(sessionState.filesArchived > 0 || sessionState.filesRemoved > 0 || sessionState.filesKept > 0) ? (
             <section className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
@@ -2020,21 +2239,21 @@ function App() {
                   </div>
 
                   <div className="mt-1 text-sm text-emerald-900">
-                    {sessionStats.archived > 0 ? (
+                    {sessionState.filesArchived > 0 ? (
                       <span className="mr-3">
-                        Archived <span className="font-semibold">{sessionStats.archived}</span>
+                        Archived <span className="font-semibold">{sessionState.filesArchived}</span>
                       </span>
                     ) : null}
 
-                    {sessionStats.removed > 0 ? (
+                    {sessionState.filesRemoved > 0 ? (
                       <span className="mr-3">
-                        Removed <span className="font-semibold">{sessionStats.removed}</span>
+                        Removed <span className="font-semibold">{sessionState.filesRemoved}</span>
                       </span>
                     ) : null}
 
-                    {sessionStats.kept > 0 ? (
+                    {sessionState.filesKept > 0 ? (
                       <span>
-                        Kept <span className="font-semibold">{sessionStats.kept}</span>
+                        Kept <span className="font-semibold">{sessionState.filesKept}</span>
                       </span>
                     ) : null}
                   </div>
@@ -2046,7 +2265,7 @@ function App() {
 
                 <button
                   onClick={() => {
-                    setSessionStats({ archived: 0, removed: 0, kept: 0 });
+                    dispatchSession({ type: 'RESET_AFTER_RESCAN' });
                     triggerRescan();
                   }}
                   className="rounded-full bg-emerald-900 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
@@ -2086,180 +2305,6 @@ function App() {
                 >
                   Clear filter
                 </button>
-              </div>
-            </section>
-          ) : null}
-
-          {batchPreview ? (
-            <section className="rounded-[2rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                    Action Preview
-                  </div>
-
-                  <h3 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
-                    {batchPreview.action === 'archive'
-                      ? 'Preview archive action'
-                      : batchPreview.action === 'remove'
-                      ? 'Preview remove action'
-                      : 'Preview keep action'}
-                  </h3>
-
-                  <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-                    DTM is showing a bounded sample of files matching this pattern before you commit to an action.
-                  </p>
-
-                  <p className="mt-1 text-sm text-slate-600">
-                    Pattern:
-                    <span className="ml-1 font-semibold">
-                      {batchPreview.filter.value.replace(/_/g, ' ')}
-                    </span>
-                    {' '}· based on{' '}
-                    <span className="font-semibold">
-                      {batchPreview.filter.key.replace(/_/g, ' ')}
-                    </span>
-                  </p>
-
-                  <p className="mt-2 max-w-2xl text-xs leading-5 text-slate-500">
-                    No files have been changed. This preview shows what would happen if you apply this action.
-                    All actions in DTM are reversible.
-                  </p>
-                </div>
-
-                <button
-                  onClick={() => setBatchPreview(null)}
-                  className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
-                >
-                  Close
-                </button>
-              </div>
-
-              <div className="mt-4 grid gap-4 md:grid-cols-2">
-                {/* Confidence */}
-                {previewConfidence && (
-                  <div className="rounded-2xl bg-slate-50 px-4 py-3">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                      Action Confidence
-                    </div>
-                    <div className="mt-2 text-sm text-slate-700">
-                      High: <span className="font-semibold">{previewConfidence.high}</span> ·{' '}
-                      Medium: <span className="font-semibold">{previewConfidence.medium}</span> ·{' '}
-                      Low: <span className="font-semibold">{previewConfidence.low}</span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Risks */}
-                <div className="rounded-2xl bg-slate-50 px-4 py-3">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                    Top Risk Signals
-                  </div>
-
-                  <div className="mt-2 text-sm text-slate-700">
-                    {previewRisks.length === 0 ? (
-                      "No significant risk signals detected."
-                    ) : (
-                      previewRisks.map(([risk, count]) => (
-                        <div key={risk}>
-                          {risk.replace(/_/g, ' ')} · <span className="font-semibold">{count}</span>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3">
-                <div className="text-sm text-slate-700">
-                  <span className="font-semibold">
-                    {selectedBatchItems.length.toLocaleString()}
-                  </span>{' '}
-                  selected from{' '}
-                  <span className="font-semibold">
-                    {batchPreview.items.length.toLocaleString()}
-                  </span>{' '}
-                  shown preview files
-                </div>
-
-                <div className="flex gap-2">
-                <button
-                  onClick={() => handleExecuteBatchPreview()}
-                  disabled={
-                    !batchPreview ||
-                    selectedBatchItems.length === 0 ||
-                    isBulkActing ||
-                    isScanning ||
-                    batchPreview.action === 'keep'
-                  }
-                  className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-                    !batchPreview ||
-                    selectedBatchItems.length === 0 ||
-                    isBulkActing ||
-                    isScanning ||
-                    batchPreview.action === 'keep'
-                      ? 'cursor-not-allowed bg-slate-200 text-slate-500'
-                      : batchPreview.action === 'archive'
-                      ? 'bg-sky-900 text-white hover:bg-sky-700'
-                      : 'bg-rose-900 text-white hover:bg-rose-700'
-                  }`}
-                >
-                  {batchPreview?.action === 'archive'
-                    ? `Apply archive to ${selectedBatchItems.length}`
-                    : batchPreview?.action === 'remove'
-                    ? `Move ${selectedBatchItems.length} to Trash`
-                    : 'Keep batch unavailable'}
-                </button>
-
-                  <button
-                    onClick={() => {
-                      setActiveQueueFilter(batchPreview.filter);
-                    }}
-                    className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200 hover:bg-slate-100"
-                  >
-                    Inspect files
-                  </button>
-                </div>
-              </div>
-
-              <div className="mt-4 max-h-[300px] space-y-2 overflow-y-auto">
-                {batchPreview.items.length === 0 ? (
-                  <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500">
-                    No matching visible ranked candidates found for this preview.
-                  </div>
-                ) : (
-                  batchPreview.items.map((file) => (
-                    <div
-                      key={file.path}
-                      className="rounded-xl bg-slate-50 px-4 py-3"
-                    >
-                      <label className="flex items-start gap-3 rounded-xl bg-slate-50 px-4 py-3">
-                        <input
-                          type="checkbox"
-                          checked={selectedBatchPaths.has(file.path)}
-                          onChange={() => toggleBatchPath(file.path)}
-                          className="mt-1"
-                        />
-
-                        <div className="min-w-0 flex-1">
-                          <div className="text-sm font-medium text-slate-900">
-                            {file.name}
-                          </div>
-                          <div className="mt-1 break-all text-xs text-slate-500">
-                            {file.path}
-                          </div>
-                          <div className="mt-2 text-xs text-slate-600">
-                            {file.recommended_action} · {file.action_confidence || 'unknown'} confidence
-                          </div>
-                        </div>
-                      </label>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              <div className="mt-4 text-xs text-slate-500">
-                Showing first {batchPreview.items.length} of {batchPreview.total.toLocaleString()} matching candidates.
               </div>
             </section>
           ) : null}
@@ -2397,31 +2442,48 @@ function App() {
 
           {scanData ? (
             <>
-              <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <StatCard label="Total files" value={scanData.total_files} tone="neutral" />
-                <StatCard
-                  label="Needs decision"
-                  value={adjustedTotals.review}
-                  tone={scanData.review_files.length > 0 ? 'warn' : 'good'}
-                />
-                <StatCard
-                  label="Duplicate Groups"
-                  value={scanData.duplicates_total}
-                  tone={scanData.duplicates.length > 0 ? 'warn' : 'good'}
-                />
-                <StatCard
-                  label="Scan issues"
-                  value={scanData.errors_total}
-                  tone={scanData.errors_total > 0 ? 'danger' : 'good'}
-                />
+              <section className="space-y-3">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  <StatCard
+                    label="Files in scope"
+                    value={adjustedTotals.totalFiles}
+                    tone="neutral"
+                  />
+
+                  <StatCard
+                    label="Needs decision"
+                    value={adjustedTotals.review}
+                    tone={adjustedTotals.review > 0 ? 'warn' : 'good'}
+                  />
+
+                  <StatCard
+                    label={sessionState.needsRescan ? 'Duplicate groups from last scan' : 'Duplicate groups'}
+                    value={adjustedTotals.duplicateGroups}
+                    tone={scanData.duplicates.length > 0 ? 'warn' : 'good'}
+                  />
+
+                  <StatCard
+                    label="Session actions"
+                    value={adjustedTotals.sessionActions}
+                    tone={adjustedTotals.sessionActions > 0 ? 'good' : 'neutral'}
+                  />
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm text-slate-500 shadow-sm">
+                  Counts reflect the last scan adjusted by this session’s actions.
+                  Refresh scan to fully reconcile filesystem changes.
+                </div>
               </section>
 
               <section className="grid grid-cols-1 gap-6 xl:grid-cols-[1.4fr_0.8fr]">
                 <SectionCard
                   title="Insights & Actions"
-                  subtitle="Global scan patterns with action previews when DTM has matching candidates."
+                  subtitle="Global scan patterns that help focus the decision queues."
                 >
                   <div className="space-y-6">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-600">
+                      Insights currently focus the decision queues only. File actions are performed from the queues so moves, history, and undo stay consistent.
+                    </div>
                     <div>
                       <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
                         Needs Decision Contexts
@@ -2451,45 +2513,6 @@ function App() {
                           setReviewVisibleCount(8);
                           setArchiveVisibleCount(8);
                           setRemoveVisibleCount(8);
-                        }}
-                        getActions={(entry) => {
-                          const filter: Exclude<QueueFilter, null> = {
-                            label: entry.label,
-                            key: 'context_type',
-                            value: entry.label,
-                          };
-
-                          const archivePreview = getPatternPreview(filter, 'archive');
-                          const removePreview = getPatternPreview(filter, 'remove');
-
-                          const archiveTotal = archivePreview?.total ?? 0;
-                          const removeTotal = removePreview?.total ?? 0;
-
-                          if (archiveTotal === 0 && removeTotal === 0) {
-                            return null;
-                          }
-
-                          const primaryAction = archiveTotal >= removeTotal ? 'archive' : 'remove';
-                          const primaryPreview = primaryAction === 'archive' ? archivePreview : removePreview;
-
-                          return (
-                            <button
-                              onClick={() => {
-                                if (primaryPreview) {
-                                  openBatchPreview(primaryPreview);
-                                }
-                              }}
-                              className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-                                primaryAction === 'archive'
-                                  ? 'bg-sky-900 text-white hover:bg-sky-700'
-                                  : 'bg-rose-900 text-white hover:bg-rose-700'
-                              }`}
-                            >
-                              {primaryAction === 'archive'
-                                ? `Preview archive (${archiveTotal})`
-                                : `Preview remove (${removeTotal})`}
-                            </button>
-                          );
                         }}
                       />
                     </div>
@@ -2523,45 +2546,6 @@ function App() {
                           setReviewVisibleCount(8);
                           setArchiveVisibleCount(8);
                           setRemoveVisibleCount(8);
-                        }}
-                        getActions={(entry) => {
-                          const filter: Exclude<QueueFilter, null> = {
-                            label: entry.label,
-                            key: 'reason',
-                            value: entry.label,
-                          };
-
-                          const archivePreview = getPatternPreview(filter, 'archive');
-                          const removePreview = getPatternPreview(filter, 'remove');
-
-                          const archiveTotal = archivePreview?.total ?? 0;
-                          const removeTotal = removePreview?.total ?? 0;
-
-                          if (archiveTotal === 0 && removeTotal === 0) {
-                            return null;
-                          }
-
-                          const primaryAction = archiveTotal >= removeTotal ? 'archive' : 'remove';
-                          const primaryPreview = primaryAction === 'archive' ? archivePreview : removePreview;
-
-                          return (
-                            <button
-                              onClick={() => {
-                                if (primaryPreview) {
-                                  openBatchPreview(primaryPreview);
-                                }
-                              }}
-                              className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-                                primaryAction === 'archive'
-                                  ? 'bg-sky-900 text-white hover:bg-sky-700'
-                                  : 'bg-rose-900 text-white hover:bg-rose-700'
-                              }`}
-                            >
-                              {primaryAction === 'archive'
-                                ? `Preview archive (${archiveTotal})`
-                                : `Preview remove (${removeTotal})`}
-                            </button>
-                          );
                         }}
                       />
                     </div>
@@ -2608,7 +2592,7 @@ function App() {
                 </div>
               </section>
 
-              {(activeQueueFilter || batchPreview) && (
+              {activeQueueFilter && (
                 <section className="rounded-2xl border border-sky-200 bg-sky-50 px-5 py-4 shadow-sm">
                   <div className="flex flex-wrap items-center justify-between gap-4">
                     
@@ -2630,16 +2614,6 @@ function App() {
                             </span>
                           </>
                         )}
-
-                        {batchPreview && (
-                          <>
-                            {' '}• Previewing{' '}
-                            <span className="font-semibold">
-                              {batchPreview.action}
-                            </span>{' '}
-                            candidates ({batchPreview.total.toLocaleString()} matches)
-                          </>
-                        )}
                       </div>
 
                       <div className="mt-1 text-xs text-sky-700">
@@ -2650,7 +2624,6 @@ function App() {
                     <button
                       onClick={() => {
                         setActiveQueueFilter(null);
-                        setBatchPreview(null);
                       }}
                       className="rounded-full bg-sky-900 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
                     >
@@ -2662,7 +2635,7 @@ function App() {
               )}
 
               <section className="space-y-6">
-                {(sessionStats.archived > 0 || sessionStats.removed > 0 || sessionStats.kept > 0) && (
+                {(sessionState.filesArchived > 0 || sessionState.filesRemoved > 0 || sessionState.filesKept > 0) && (
                   <section className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 shadow-sm">
                     <div className="flex flex-wrap items-center justify-between gap-4">
                       
@@ -2672,21 +2645,23 @@ function App() {
                         </div>
 
                         <div className="mt-1 text-sm text-emerald-900">
-                          {sessionStats.archived > 0 && (
+                          {sessionState.filesArchived > 0 ? (
                             <span className="mr-3">
-                              Archived <span className="font-semibold">{sessionStats.archived}</span>
+                              Archived <span className="font-semibold">{sessionState.filesArchived}</span>
                             </span>
-                          )}
-                          {sessionStats.removed > 0 && (
+                          ) : null}
+
+                          {sessionState.filesRemoved > 0 ? (
                             <span className="mr-3">
-                              Removed <span className="font-semibold">{sessionStats.removed}</span>
+                              Removed <span className="font-semibold">{sessionState.filesRemoved}</span>
                             </span>
-                          )}
-                          {sessionStats.kept > 0 && (
+                          ) : null}
+
+                          {sessionState.filesKept > 0 ? (
                             <span>
-                              Kept <span className="font-semibold">{sessionStats.kept}</span>
+                              Kept <span className="font-semibold">{sessionState.filesKept}</span>
                             </span>
-                          )}
+                          ) : null}
                         </div>
 
                         <div className="mt-1 text-xs text-emerald-700">
@@ -2696,7 +2671,7 @@ function App() {
 
                       <button
                         onClick={() => {
-                          setSessionStats({ archived: 0, removed: 0, kept: 0 });
+                          dispatchSession({ type: 'RESET_AFTER_RESCAN' });
                           triggerRescan();
                         }}
                         className="rounded-full bg-emerald-900 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
@@ -2742,11 +2717,6 @@ function App() {
                         title="Decision Queue"
                         subtitle="Filtered, ranked candidates based on your current focus."
                       >
-                        {activeQueueFilter && (
-                          <div className="mb-2 text-xs text-sky-700">
-                            Showing results scoped to current focus
-                          </div>
-                        )}
 
                         {sortedReviewFiles.length > 0 ? (
                           <div className="mb-3 text-xs text-slate-500">
@@ -2785,10 +2755,12 @@ function App() {
                           />
                         ) : null}
 
-                        {scanData.review_files.length === 0 ? (
-                          <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
-                            No suspicious files detected in this scan.
-                          </div>
+                        {filteredReviewFiles.length === 0 ? (
+                          <div className="rounded-2xl bg-slate-50 px-4 py-4 text-sm text-slate-600">
+                          {activeQueueFilter
+                            ? 'No decision files match the current focus.'
+                            : 'No decision files detected in this scan.'}
+                        </div>
                         ) : (
                           <div className="space-y-3">
                             {visibleReviewFiles.map((file) => (
@@ -2800,14 +2772,40 @@ function App() {
                                 busyLabel="Archiving…"
                                 onAction={async (filePath) => {
                                   await handleMoveToArchive(filePath);
+                                
+                                  dispatchSession({
+                                    type: 'FILE_ACTION_SUCCEEDED',
+                                    sourceQueue: 'review',
+                                    fileAction: 'archive',
+                                    filePath,
+                                  });
+                                
                                   reconcileInsightsAfterSingleAction(file, 'archive');
                                 }}
+                                
                                 onKeep={async (filePath) => {
                                   await handleKeepFile(filePath);
+                                
+                                  dispatchSession({
+                                    type: 'FILE_ACTION_SUCCEEDED',
+                                    sourceQueue: 'review',
+                                    fileAction: 'keep',
+                                    filePath,
+                                  });
+                                
                                   reconcileInsightsAfterSingleAction(file, 'review');
                                 }}
+                                
                                 onRemove={async (filePath) => {
                                   await handleMoveToTrash(filePath);
+                                
+                                  dispatchSession({
+                                    type: 'FILE_ACTION_SUCCEEDED',
+                                    sourceQueue: 'review',
+                                    fileAction: 'remove',
+                                    filePath,
+                                  });
+                                
                                   reconcileInsightsAfterSingleAction(file, 'remove');
                                 }}
                                 recommendedAction="archive"
@@ -2891,10 +2889,12 @@ function App() {
                           />
                         ) : null}
 
-                        {scanData.archive_candidates.length === 0 ? (
-                          <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
-                            No archive candidates detected in this scan.
-                          </div>
+                        {filteredArchiveCandidates.length === 0 ? (
+                          <div className="rounded-2xl bg-slate-50 px-4 py-4 text-sm text-slate-600">
+                          {activeQueueFilter
+                            ? 'No archive candidates match the current focus.'
+                            : 'No archive candidates detected in this scan.'}
+                        </div>
                         ) : (
                           <div className="space-y-3">
                             {visibleArchiveCandidates.map((file) => (
@@ -2906,14 +2906,40 @@ function App() {
                                 busyLabel="Archiving…"
                                 onAction={async (filePath) => {
                                   await handleMoveToArchive(filePath);
+                                
+                                  dispatchSession({
+                                    type: 'FILE_ACTION_SUCCEEDED',
+                                    sourceQueue: 'archive',
+                                    fileAction: 'archive',
+                                    filePath,
+                                  });
+                                
                                   reconcileInsightsAfterSingleAction(file, 'archive');
                                 }}
+                                
                                 onKeep={async (filePath) => {
                                   await handleKeepFile(filePath);
+                                
+                                  dispatchSession({
+                                    type: 'FILE_ACTION_SUCCEEDED',
+                                    sourceQueue: 'archive',
+                                    fileAction: 'keep',
+                                    filePath,
+                                  });
+                                
                                   reconcileInsightsAfterSingleAction(file, 'review');
                                 }}
+                                
                                 onRemove={async (filePath) => {
                                   await handleMoveToTrash(filePath);
+                                
+                                  dispatchSession({
+                                    type: 'FILE_ACTION_SUCCEEDED',
+                                    sourceQueue: 'archive',
+                                    fileAction: 'remove',
+                                    filePath,
+                                  });
+                                
                                   reconcileInsightsAfterSingleAction(file, 'remove');
                                 }}
                                 recommendedAction="archive"
@@ -2997,10 +3023,12 @@ function App() {
                           />
                         ) : null}
 
-                        {scanData.remove_candidates.length === 0 ? (
-                          <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
-                            No remove candidates detected in this scan.
-                          </div>
+                        {filteredRemoveCandidates.length === 0 ? (
+                          <div className="rounded-2xl bg-slate-50 px-4 py-4 text-sm text-slate-600">
+                          {activeQueueFilter
+                            ? 'No remove candidates match the current focus.'
+                            : 'No remove candidates detected in this scan.'}
+                        </div>
                         ) : (
                           <div className="space-y-3">
                             {visibleRemoveCandidates.map((file) => (
@@ -3012,14 +3040,40 @@ function App() {
                                 busyLabel="Removing…"
                                 onAction={async (filePath) => {
                                   await handleMoveToTrash(filePath);
+                                
+                                  dispatchSession({
+                                    type: 'FILE_ACTION_SUCCEEDED',
+                                    sourceQueue: 'remove',
+                                    fileAction: 'remove',
+                                    filePath,
+                                  });
+                                
                                   reconcileInsightsAfterSingleAction(file, 'remove');
                                 }}
+                                
                                 onKeep={async (filePath) => {
                                   await handleKeepFile(filePath);
+                                
+                                  dispatchSession({
+                                    type: 'FILE_ACTION_SUCCEEDED',
+                                    sourceQueue: 'remove',
+                                    fileAction: 'keep',
+                                    filePath,
+                                  });
+                                
                                   reconcileInsightsAfterSingleAction(file, 'review');
                                 }}
+                                
                                 onArchive={async (filePath) => {
                                   await handleMoveToArchive(filePath);
+                                
+                                  dispatchSession({
+                                    type: 'FILE_ACTION_SUCCEEDED',
+                                    sourceQueue: 'remove',
+                                    fileAction: 'archive',
+                                    filePath,
+                                  });
+                                
                                   reconcileInsightsAfterSingleAction(file, 'archive');
                                 }}
                                 recommendedAction="remove"
