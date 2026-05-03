@@ -838,7 +838,7 @@ function App() {
     action: InsightActionType
   ) => {
     const preview = buildInsightPreview(sectionKind, entry, action);
-    setBatchPreview(preview);
+    openBatchPreview(preview);
   };
 
   const loadActionHistory = async () => {
@@ -1878,17 +1878,48 @@ function App() {
 
   const handleExecutePreview = async () => {
     if (!batchPreview) return;
+    if (selectedBatchItems.length === 0) return;
   
-    const filter = batchPreview.filter;
     const action = batchPreview.action;
   
-    await handleInsightAction(
-      filter.key as InsightSectionKind,
-      { label: filter.value, count: batchPreview.total },
-      action as InsightActionType
-    );
+    if (action === 'archive') {
+      const reviewFiles = selectedBatchItems.filter((file) =>
+        sortedReviewFiles.some((candidate) => candidate.path === file.path)
+      );
+  
+      const archiveFiles = selectedBatchItems.filter((file) =>
+        sortedArchiveCandidates.some((candidate) => candidate.path === file.path)
+      );
+  
+      if (reviewFiles.length > 0) {
+        await handleBulkQueueAction('review', 'archive', reviewFiles);
+      }
+  
+      if (archiveFiles.length > 0) {
+        await handleBulkQueueAction('archive', 'archive', archiveFiles);
+      }
+    }
+  
+    if (action === 'remove') {
+      const reviewFiles = selectedBatchItems.filter((file) =>
+        sortedReviewFiles.some((candidate) => candidate.path === file.path)
+      );
+  
+      const removeFiles = selectedBatchItems.filter((file) =>
+        sortedRemoveCandidates.some((candidate) => candidate.path === file.path)
+      );
+  
+      if (reviewFiles.length > 0) {
+        await handleBulkQueueAction('review', 'remove', reviewFiles);
+      }
+  
+      if (removeFiles.length > 0) {
+        await handleBulkQueueAction('remove', 'remove', removeFiles);
+      }
+    }
   
     setBatchPreview(null);
+    setSelectedBatchPaths(new Set());
   };
 
   const buildBatchPreview = (
@@ -2572,22 +2603,22 @@ function App() {
 
               <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3">
                 <div className="text-sm text-slate-700">
-                  Showing{' '}
+                  Selected{' '}
                   <span className="font-semibold">
-                    {batchPreview.items.length.toLocaleString()}
+                    {selectedBatchItems.length.toLocaleString()}
                   </span>{' '}
                   of{' '}
                   <span className="font-semibold">
-                    {batchPreview.total.toLocaleString()}
+                    {batchPreview.items.length.toLocaleString()}
                   </span>{' '}
-                  matching files.
+                  shown files.
                 </div>
 
                 <button
                   onClick={handleExecutePreview}
-                  disabled={isBulkActing || isScanning || batchPreview.items.length === 0}
+                  disabled={isBulkActing || isScanning || selectedBatchItems.length === 0}
                   className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-                    isBulkActing || isScanning || batchPreview.items.length === 0
+                    isBulkActing || isScanning || selectedBatchItems.length === 0
                       ? 'cursor-not-allowed bg-slate-200 text-slate-500'
                       : batchPreview.action === 'archive'
                       ? 'bg-sky-900 text-white hover:bg-sky-700'
@@ -2595,8 +2626,8 @@ function App() {
                   }`}
                 >
                   {batchPreview.action === 'archive'
-                    ? `Apply archive to ${batchPreview.total}`
-                    : `Move ${batchPreview.total} to Trash`}
+                    ? `Apply archive to ${selectedBatchItems.length}`
+                    : `Move ${selectedBatchItems.length} to Trash`}
                 </button>
               </div>
 
@@ -2608,15 +2639,28 @@ function App() {
                 ) : (
                   batchPreview.items.map((file) => (
                     <div key={file.path} className="rounded-xl bg-slate-50 px-4 py-3">
-                      <div className="text-sm font-medium text-slate-900">
-                        {file.name}
-                      </div>
-                      <div className="mt-1 break-all text-xs text-slate-500">
-                        {file.path}
-                      </div>
-                      <div className="mt-2 text-xs text-slate-600">
-                        {file.recommended_action} · {file.action_confidence || 'unknown'} confidence
-                      </div>
+                      <label className="flex items-start gap-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedBatchPaths.has(file.path)}
+                          onChange={() => toggleBatchPath(file.path)}
+                          className="mt-1"
+                        />
+
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-medium text-slate-900">
+                            {file.name}
+                          </div>
+
+                          <div className="mt-1 break-all text-xs text-slate-500">
+                            {file.path}
+                          </div>
+
+                          <div className="mt-2 text-xs text-slate-600">
+                            {file.recommended_action} · {file.action_confidence || 'unknown'} confidence
+                          </div>
+                        </div>
+                      </label>
                     </div>
                   ))
                 )}
