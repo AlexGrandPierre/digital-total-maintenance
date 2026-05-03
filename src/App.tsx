@@ -31,6 +31,10 @@ type SourceQueue = 'review' | 'archive' | 'remove' | 'duplicate';
 
 type SessionFileAction = 'keep' | 'archive' | 'remove';
 
+type InsightActionType = 'archive' | 'remove';
+
+type InsightSectionKind = 'context_type' | 'reason';
+
 type SessionState = {
   resolvedPaths: string[];
   reviewResolved: number;
@@ -227,12 +231,23 @@ function InsightList({
   onSelect,
   activeFilter,
   getMatchCount,
+  getAction,
+  onPreviewRequest,
 }: {
   entries: Array<{ label: string; count: number }>;
   emptyMessage: string;
   onSelect?: (entry: { label: string; count: number }) => void;
   activeFilter?: QueueFilter;
   getMatchCount?: (entry: { label: string; count: number }) => number;
+  getAction?: (entry: { label: string; count: number }) => InsightActionType | null;
+  onInsightAction?: (
+    entry: { label: string; count: number },
+    action: InsightActionType
+  ) => void;
+  onPreviewRequest?: (
+    entry: { label: string; count: number },
+    action: InsightActionType
+  ) => void;
 }) {
   if (!entries || entries.length === 0) {
     return <p className="text-sm text-slate-500">{emptyMessage}</p>;
@@ -290,11 +305,32 @@ function InsightList({
                     >
                       {isActive ? 'Inspecting' : 'Inspect'}
                     </button>
-                    ) : (
-                      <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-400">
-                        No queue matches
-                      </span>
+                  ) : (
+                    <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-400">
+                      No queue matches
+                    </span>
                   )}
+
+                  {(() => {
+                    const action = getAction?.(entry) ?? null;
+
+                    if (!action || !onPreviewRequest || !hasActionableMatches) {
+                      return null;
+                    }
+
+                    return (
+                      <button
+                        onClick={() => onPreviewRequest(entry, action)}
+                        className={`rounded-full px-3 py-1.5 text-xs font-semibold text-white transition ${
+                          action === 'archive'
+                            ? 'bg-sky-900 hover:bg-sky-700'
+                            : 'bg-rose-900 hover:bg-rose-700'
+                        }`}
+                      >
+                        {action === 'archive' ? 'Preview Archive' : 'Preview Remove'}
+                      </button>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
@@ -442,6 +478,30 @@ function applyQueueFilter(items: ClassifiedFile[], filter: QueueFilter) {
   });
 }
 
+function getActionForInsightLabel(label: string): InsightActionType | null {
+  const normalized = label.toLowerCase();
+
+  if (
+    normalized.includes('archive') ||
+    normalized.includes('compressed') ||
+    normalized.includes('export') ||
+    normalized.includes('installer')
+  ) {
+    return 'archive';
+  }
+
+  if (
+    normalized.includes('temporary') ||
+    normalized.includes('temp') ||
+    normalized.includes('log') ||
+    normalized.includes('generated')
+  ) {
+    return 'remove';
+  }
+
+  return null;
+}
+
 function removeResolvedFiles(items: ClassifiedFile[], resolvedPaths: string[]) {
   const resolved = new Set(resolvedPaths);
   return items.filter((item) => !resolved.has(item.path));
@@ -559,6 +619,19 @@ function App() {
   const openBatchPreview = (preview: Exclude<BatchPreview, null>) => {
     setBatchPreview(preview);
     setSelectedBatchPaths(new Set(preview.items.map((item) => item.path)));
+  };
+
+  const getFilterMatchedPaths = (filter: Exclude<QueueFilter, null>) => {
+    const matches = [
+      ...applyQueueFilter(sortedReviewFiles, filter),
+      ...applyQueueFilter(sortedArchiveCandidates, filter),
+      ...applyQueueFilter(sortedRemoveCandidates, filter),
+    ];
+  
+    return matches
+      .map((file) => file.path)
+      .sort()
+      .join('|');
   };
 
   useEffect(() => {
@@ -691,6 +764,25 @@ function App() {
     ] as Array<[string, number]>;
   }, [scanData]);
 
+  const decisionReasonSignatures = useMemo(() => {
+    if (!scanData?.scan_insights) return new Set<string>();
+  
+    const signatures = new Set<string>();
+  
+    for (const entry of scanData.scan_insights.top_review_reasons) {
+      const filter: Exclude<QueueFilter, null> = {
+        label: entry.label,
+        key: 'reason',
+        value: entry.label,
+      };
+  
+      const signature = getFilterMatchedPaths(filter);
+      if (signature) signatures.add(signature);
+    }
+  
+    return signatures;
+  }, [scanData, sortedReviewFiles, sortedArchiveCandidates, sortedRemoveCandidates]);
+
   const handleBrowseForFolder = async () => {
     try {
       const result = await window.electronAPI?.browseForFolder?.();
@@ -705,6 +797,48 @@ function App() {
         message: error instanceof Error ? error.message : 'Failed to open folder picker.',
       });
     }
+  };
+
+  const buildInsightPreview = (
+    sectionKind: InsightSectionKind,
+    entry: { label: string; count: number },
+    action: InsightActionType
+  ): Exclude<BatchPreview, null> => {
+    const filter: Exclude<QueueFilter, null> = {
+      label: entry.label,
+      key: sectionKind,
+      value: entry.label,
+    };
+  
+    const reviewMatches = applyQueueFilter(sortedReviewFiles, filter);
+    const archiveMatches = applyQueueFilter(sortedArchiveCandidates, filter);
+    const removeMatches = applyQueueFilter(sortedRemoveCandidates, filter);
+  
+    let items: ClassifiedFile[] = [];
+  
+    if (action === 'archive') {
+      items = [...reviewMatches, ...archiveMatches];
+    }
+  
+    if (action === 'remove') {
+      items = [...reviewMatches, ...removeMatches];
+    }
+  
+    return {
+      filter,
+      action,
+      items: items.slice(0, 25), // bounded preview
+      total: items.length,
+    };
+  };
+
+  const handleInsightPreview = (
+    sectionKind: InsightSectionKind,
+    entry: { label: string; count: number },
+    action: InsightActionType
+  ) => {
+    const preview = buildInsightPreview(sectionKind, entry, action);
+    setBatchPreview(preview);
   };
 
   const loadActionHistory = async () => {
@@ -794,6 +928,56 @@ function App() {
     if (!scanData) return [];
     return scanData.duplicates.slice(0, duplicateVisibleCount);
   }, [scanData, duplicateVisibleCount]);
+
+  const dedupedReviewContexts = useMemo(() => {
+    if (!scanData?.scan_insights) return [];
+  
+    const seen = new Set<string>();
+  
+    return scanData.scan_insights.review_context_summary.filter((entry) => {
+      const filter: Exclude<QueueFilter, null> = {
+        label: entry.label,
+        key: 'context_type',
+        value: entry.label,
+      };
+  
+      const signature = getFilterMatchedPaths(filter);
+  
+      if (!signature) return false;
+      if (decisionReasonSignatures.has(signature)) return false;
+      if (seen.has(signature)) return false;
+  
+      seen.add(signature);
+      return true;
+    });
+  }, [
+    scanData,
+    sortedReviewFiles,
+    sortedArchiveCandidates,
+    sortedRemoveCandidates,
+    decisionReasonSignatures,
+  ]);
+  
+  const dedupedDecisionReasons = useMemo(() => {
+    if (!scanData?.scan_insights) return [];
+  
+    const seen = new Set<string>();
+  
+    return scanData.scan_insights.top_review_reasons.filter((entry) => {
+      const filter: Exclude<QueueFilter, null> = {
+        label: entry.label,
+        key: 'reason',
+        value: entry.label,
+      };
+  
+      const signature = getFilterMatchedPaths(filter);
+  
+      if (!signature || seen.has(signature)) return false;
+  
+      seen.add(signature);
+      return true;
+    });
+  }, [scanData, sortedReviewFiles, sortedArchiveCandidates, sortedRemoveCandidates]);
 
   const handleScan = () => {
     if (isBulkActing) {
@@ -1402,6 +1586,60 @@ function App() {
     return filteredRemoveCandidates.slice(0, removeVisibleCount);
   }, [sortedRemoveCandidates, activeQueueFilter]);
 
+  const handleInsightAction = async (
+    sectionKind: InsightSectionKind,
+    entry: { label: string; count: number },
+    action: InsightActionType
+  ) => {
+    const filter: Exclude<QueueFilter, null> = {
+      label: entry.label,
+      key: sectionKind,
+      value: entry.label,
+    };
+  
+    const matchingReviewFiles = applyQueueFilter(sortedReviewFiles, filter);
+    const matchingArchiveFiles = applyQueueFilter(sortedArchiveCandidates, filter);
+    const matchingRemoveFiles = applyQueueFilter(sortedRemoveCandidates, filter);
+  
+    if (action === 'archive') {
+      if (matchingReviewFiles.length === 0 && matchingArchiveFiles.length === 0) {
+        setActionStatus({
+          tone: 'error',
+          message: `No archiveable files found for "${entry.label}".`,
+        });
+        return;
+      }
+  
+      if (matchingReviewFiles.length > 0) {
+        await handleBulkQueueAction('review', 'archive', matchingReviewFiles);
+      }
+  
+      if (matchingArchiveFiles.length > 0) {
+        await handleBulkQueueAction('archive', 'archive', matchingArchiveFiles);
+      }
+  
+      return;
+    }
+  
+    if (action === 'remove') {
+      if (matchingReviewFiles.length === 0 && matchingRemoveFiles.length === 0) {
+        setActionStatus({
+          tone: 'error',
+          message: `No removable files found for "${entry.label}".`,
+        });
+        return;
+      }
+  
+      if (matchingReviewFiles.length > 0) {
+        await handleBulkQueueAction('review', 'remove', matchingReviewFiles);
+      }
+  
+      if (matchingRemoveFiles.length > 0) {
+        await handleBulkQueueAction('remove', 'remove', matchingRemoveFiles);
+      }
+    }
+  };
+
   const previewConfidence = useMemo(() => {
     if (!batchPreview) return null;
     return getConfidenceBreakdown(batchPreview.items);
@@ -1453,6 +1691,14 @@ function App() {
     preset: scanPreset,
     customPath: customPath.trim(),
   });
+
+  const getFilterMatchCount = (filter: Exclude<QueueFilter, null>) => {
+    return (
+      applyQueueFilter(sortedReviewFiles, filter).length +
+      applyQueueFilter(sortedArchiveCandidates, filter).length +
+      applyQueueFilter(sortedRemoveCandidates, filter).length
+    );
+  };
 
   const triggerRescan = () => {
     setIsScanning(true);
@@ -1630,72 +1876,19 @@ function App() {
     });
   };
 
-  const handleExecuteBatchPreview = async () => {
-    if (!batchPreview || selectedBatchItems.length === 0) return;
-    if (batchPreview.action !== 'archive' && batchPreview.action !== 'remove') return;
-    if (isBulkActing || isScanning) return;
+  const handleExecutePreview = async () => {
+    if (!batchPreview) return;
   
-    const actionType = batchPreview.action;
-    const sourceQueue = actionType === 'archive' ? 'archive' : 'remove';
+    const filter = batchPreview.filter;
+    const action = batchPreview.action;
   
-    setIsBulkActing(true);
-    setBusyPath(null);
-    setActionStatus(null);
+    await handleInsightAction(
+      filter.key as InsightSectionKind,
+      { label: filter.value, count: batchPreview.total },
+      action as InsightActionType
+    );
   
-    let successCount = 0;
-    let failureCount = 0;
-    const actedItems: ClassifiedFile[] = [];
-  
-    for (let index = 0; index < selectedBatchItems.length; index += 1) {
-      const file = selectedBatchItems[index];
-  
-      setBulkProgress({
-        action: actionType,
-        current: index + 1,
-        total: selectedBatchItems.length,
-        currentFileName: file.name,
-      });
-  
-      try {
-        const result = await performQueueAction(actionType, file.path, {
-          rescanAfterSuccess: false,
-          mode: 'bulk',
-        });
-  
-        if (result.success) {
-          successCount += 1;
-          actedItems.push(file);
-        } else {
-          failureCount += 1;
-        }
-      } catch {
-        failureCount += 1;
-      }
-    }
-  
-    if (actedItems.length > 0) {
-      reconcilePatternAfterBatchAction(batchPreview, actedItems);
-      await loadActionHistory();
-    }
-  
-    setBulkProgress(null);
-    setIsBulkActing(false);
     setBatchPreview(null);
-    setSelectedBatchPaths(new Set());
-  
-    if (failureCount === 0) {
-      setActionStatus({
-        tone: 'success',
-        message: `${
-          actionType === 'archive' ? 'Archived' : 'Moved to Trash'
-        } ${successCount} selected preview file${successCount === 1 ? '' : 's'}. Undo is available in Recent Actions.`,
-      });
-    } else {
-      setActionStatus({
-        tone: 'error',
-        message: `Preview action finished with partial success: ${successCount} succeeded, ${failureCount} failed. Undo is available for successful actions in Recent Actions.`,
-      });
-    }
   };
 
   const buildBatchPreview = (
@@ -2309,6 +2502,128 @@ function App() {
             </section>
           ) : null}
 
+          {batchPreview ? (
+            <section className="rounded-[2rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                    Action Preview
+                  </div>
+
+                  <h3 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
+                    {batchPreview.action === 'archive'
+                      ? 'Preview archive action'
+                      : 'Preview remove action'}
+                  </h3>
+
+                  <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
+                    Review the bounded sample below before applying this insight action.
+                  </p>
+
+                  <p className="mt-1 text-sm text-slate-600">
+                    Pattern:{' '}
+                    <span className="font-semibold">
+                      {batchPreview.filter.value.replace(/_/g, ' ')}
+                    </span>{' '}
+                    · {batchPreview.total.toLocaleString()} matching file
+                    {batchPreview.total === 1 ? '' : 's'}
+                  </p>
+                </div>
+
+                <button
+                  onClick={() => setBatchPreview(null)}
+                  className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="mt-4 grid gap-4 md:grid-cols-2">
+                {previewConfidence ? (
+                  <div className="rounded-2xl bg-slate-50 px-4 py-3">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      Action Confidence
+                    </div>
+                    <div className="mt-2 text-sm text-slate-700">
+                      High: <span className="font-semibold">{previewConfidence.high}</span> ·{' '}
+                      Medium: <span className="font-semibold">{previewConfidence.medium}</span> ·{' '}
+                      Low: <span className="font-semibold">{previewConfidence.low}</span>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="rounded-2xl bg-slate-50 px-4 py-3">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Top Risk Signals
+                  </div>
+
+                  <div className="mt-2 text-sm text-slate-700">
+                    {previewRisks.length === 0
+                      ? 'No significant risk signals detected.'
+                      : previewRisks.map(([risk, count]) => (
+                          <div key={risk}>
+                            {risk.replace(/_/g, ' ')} ·{' '}
+                            <span className="font-semibold">{count}</span>
+                          </div>
+                        ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3">
+                <div className="text-sm text-slate-700">
+                  Showing{' '}
+                  <span className="font-semibold">
+                    {batchPreview.items.length.toLocaleString()}
+                  </span>{' '}
+                  of{' '}
+                  <span className="font-semibold">
+                    {batchPreview.total.toLocaleString()}
+                  </span>{' '}
+                  matching files.
+                </div>
+
+                <button
+                  onClick={handleExecutePreview}
+                  disabled={isBulkActing || isScanning || batchPreview.items.length === 0}
+                  className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+                    isBulkActing || isScanning || batchPreview.items.length === 0
+                      ? 'cursor-not-allowed bg-slate-200 text-slate-500'
+                      : batchPreview.action === 'archive'
+                      ? 'bg-sky-900 text-white hover:bg-sky-700'
+                      : 'bg-rose-900 text-white hover:bg-rose-700'
+                  }`}
+                >
+                  {batchPreview.action === 'archive'
+                    ? `Apply archive to ${batchPreview.total}`
+                    : `Move ${batchPreview.total} to Trash`}
+                </button>
+              </div>
+
+              <div className="mt-4 max-h-[300px] space-y-2 overflow-y-auto">
+                {batchPreview.items.length === 0 ? (
+                  <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500">
+                    No matching files found for this preview.
+                  </div>
+                ) : (
+                  batchPreview.items.map((file) => (
+                    <div key={file.path} className="rounded-xl bg-slate-50 px-4 py-3">
+                      <div className="text-sm font-medium text-slate-900">
+                        {file.name}
+                      </div>
+                      <div className="mt-1 break-all text-xs text-slate-500">
+                        {file.path}
+                      </div>
+                      <div className="mt-2 text-xs text-slate-600">
+                        {file.recommended_action} · {file.action_confidence || 'unknown'} confidence
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </section>
+          ) : null}
+
           {isBulkActing && bulkProgress ? (
             <section className="rounded-[2rem] border border-violet-200 bg-violet-50 p-6 shadow-sm">
               <div className="flex items-start gap-4">
@@ -2477,8 +2792,8 @@ function App() {
 
               <section className="grid grid-cols-1 gap-6 xl:grid-cols-[1.4fr_0.8fr]">
                 <SectionCard
-                  title="Insights & Actions"
-                  subtitle="Global scan patterns that help focus the decision queues."
+                  title="Focus Insights"
+                  subtitle="Patterns DTM detected. Select one to focus the decision queues."
                 >
                   <div className="space-y-6">
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-600">
@@ -2486,10 +2801,10 @@ function App() {
                     </div>
                     <div>
                       <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                        Needs Decision Contexts
+                        File Contexts
                       </div>
                       <InsightList
-                        entries={scanData.scan_insights?.review_context_summary || []}
+                        entries={dedupedReviewContexts}
                         emptyMessage="No decision-context patterns available."
                         activeFilter={activeQueueFilter}
                         getMatchCount={(entry) => {
@@ -2499,8 +2814,7 @@ function App() {
                             value: entry.label,
                           };
 
-                          const reviewPreview = getPatternPreview(filter, 'keep');
-                          return reviewPreview?.total ?? 0;
+                          return getFilterMatchCount(filter);
                         }}
                         onSelect={(entry) => {
                           const filter: Exclude<QueueFilter, null> = {
@@ -2514,15 +2828,19 @@ function App() {
                           setArchiveVisibleCount(8);
                           setRemoveVisibleCount(8);
                         }}
+                        getAction={(entry) => getActionForInsightLabel(entry.label)}
+                        onPreviewRequest={(entry, action) => {
+                          handleInsightPreview('context_type', entry, action);
+                        }}
                       />
                     </div>
 
                     <div>
                       <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                        Top Decision Reasons
+                        Decision Reasons
                       </div>
                       <InsightList
-                        entries={scanData.scan_insights?.top_review_reasons || []}
+                        entries={dedupedDecisionReasons}
                         emptyMessage="No decision reasons available."
                         activeFilter={activeQueueFilter}
                         getMatchCount={(entry) => {
@@ -2532,8 +2850,7 @@ function App() {
                             value: entry.label,
                           };
 
-                          const reviewPreview = getPatternPreview(filter, 'keep');
-                          return reviewPreview?.total ?? 0;
+                          return getFilterMatchCount(filter);
                         }}
                         onSelect={(entry) => {
                           const filter: Exclude<QueueFilter, null> = {
@@ -2546,6 +2863,10 @@ function App() {
                           setReviewVisibleCount(8);
                           setArchiveVisibleCount(8);
                           setRemoveVisibleCount(8);
+                        }}
+                        getAction={(entry) => getActionForInsightLabel(entry.label)}
+                        onPreviewRequest={(entry, action) => {
+                          handleInsightPreview('reason', entry, action);
                         }}
                       />
                     </div>
