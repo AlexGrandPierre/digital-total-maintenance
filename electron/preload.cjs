@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('move-to-trash', { filePath, mode }),
 
   browseForFolder: () => ipcRenderer.invoke('browse-for-folder'),
+  browseForCsv: () => ipcRenderer.invoke('browse-for-csv'),
   getActionHistory: (limit = 20) => ipcRenderer.invoke('get-action-history', { limit }),
   restoreFromHistory: (entry) => ipcRenderer.invoke('restore-from-history', { entry }),
   clearActionHistory: () => ipcRenderer.invoke('clear-action-history'),

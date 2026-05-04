@@ -12,6 +12,7 @@ import type {
   DuplicateGroup,
   DuplicateGroupItem,
   ScanResult,
+  CsvScanResult,
 } from './types/dtm';
 
 type QueueFilter = {
@@ -67,13 +68,19 @@ type ActiveQueueFilter = Exclude<QueueFilter, null>;
 
 type ActionHistoryEntry = {
   id: string;
-  action: string;
-  source_path: string;
-  destination_path?: string;
-  status: string;
   timestamp: string;
+  action:
+    | 'move_to_review'
+    | 'move_to_archive'
+    | 'move_to_trash'
+    | 'restore_from_review'
+    | 'restore_from_archive'
+    | 'restore_from_trash';
+  source_path: string;
+  destination_path?: string | null;
+  status: 'success' | 'error';
   mode: 'single' | 'bulk';
-  reverts_history_id?: string;
+  reverts_history_id?: string | null;
 };
 
 const initialSessionState: SessionState = {
@@ -240,10 +247,6 @@ function InsightList({
   activeFilter?: QueueFilter;
   getMatchCount?: (entry: { label: string; count: number }) => number;
   getAction?: (entry: { label: string; count: number }) => InsightActionType | null;
-  onInsightAction?: (
-    entry: { label: string; count: number },
-    action: InsightActionType
-  ) => void;
   onPreviewRequest?: (
     entry: { label: string; count: number },
     action: InsightActionType
@@ -547,6 +550,7 @@ function App() {
   const [scanPreset, setScanPreset] = useState<ScanPreset>('test');
   const [customPath, setCustomPath] = useState('');
   const [showSystemFiles, setShowSystemFiles] = useState(false);
+  const [csvPath, setCsvPath] = useState('');
   const [actionStatus, setActionStatus] = useState<{
     tone: 'success' | 'error';
     message: string;
@@ -602,6 +606,8 @@ function App() {
 
   const [activeQueueFilter, setActiveQueueFilter] = useState<QueueFilter>(null);
 
+  const [csvData, setCsvData] = useState<CsvScanResult | null>(null);
+
   const [batchPreview, setBatchPreview] = useState<{
     filter: Exclude<QueueFilter, null>;
     action: 'archive' | 'remove' | 'keep';
@@ -652,9 +658,18 @@ function App() {
 
       try {
         const parsed = JSON.parse(output);
+      
+        if (parsed.type === 'csv_scan') {
+          setCsvData(parsed);
+          setScanData(null);
+          return;
+        }
+      
         setScanData(parsed);
+        setCsvData(null);
       } catch {
         setScanData(null);
+        setCsvData(null);
       }
     });
 
@@ -709,6 +724,8 @@ function App() {
         return 'Documents';
       case 'custom':
         return 'Custom Folder';
+      case 'csv':
+        return 'CSV Dataset';
       case 'test':
       default:
         return 'Test Folder';
@@ -795,6 +812,22 @@ function App() {
       setActionStatus({
         tone: 'error',
         message: error instanceof Error ? error.message : 'Failed to open folder picker.',
+      });
+    }
+  };
+
+  const handleBrowseForCsv = async () => {
+    try {
+      const result = await window.electronAPI?.browseForCsv?.();
+  
+      if (result?.success && result.path) {
+        setCsvPath(result.path);
+        setActionStatus(null);
+      }
+    } catch (error) {
+      setActionStatus({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Failed to open CSV picker.',
       });
     }
   };
@@ -987,19 +1020,20 @@ function App() {
       });
       return;
     }
-
+  
     setScanProgress(null);
-
-    if (scanPreset === 'custom' && !customPath.trim()) {
+  
+    const normalizedCustomPath = customPath.trim();
+    const normalizedCsvPath = csvPath.trim();
+  
+    if (scanPreset === 'custom' && !normalizedCustomPath) {
       setActionStatus({
         tone: 'error',
         message: 'Please enter a folder path before scanning a custom location.',
       });
       return;
     }
-
-    const normalizedCustomPath = customPath.trim();
-
+  
     if (scanPreset === 'custom' && normalizedCustomPath === '/') {
       setActionStatus({
         tone: 'error',
@@ -1008,15 +1042,25 @@ function App() {
       });
       return;
     }
-
+  
+    if (scanPreset === 'csv' && !normalizedCsvPath) {
+      setActionStatus({
+        tone: 'error',
+        message: 'Please choose or enter a CSV file path before scanning a CSV dataset.',
+      });
+      return;
+    }
+  
     setIsScanning(true);
     setScanData(null);
+    setCsvData(null);
     setActionStatus(null);
     setScanOutput(`Scanning ${scanTargetLabel}... Please wait.`);
-
+  
     window.electronAPI?.sendScanRequest?.({
       preset: scanPreset,
       customPath: normalizedCustomPath,
+      csvPath: normalizedCsvPath,
     });
   };
 
@@ -1549,6 +1593,30 @@ function App() {
     return Object.entries(scanData.age_buckets);
   }, [scanData]);
 
+  const csvHealth = useMemo(() => {
+    if (!csvData?.success) return null;
+  
+    const missingEntries = Object.entries(csvData.missing_by_column || {});
+    const totalMissing = missingEntries.reduce(
+      (sum, [, count]) => sum + Number(count || 0),
+      0
+    );
+  
+    const emptyColumns = missingEntries
+      .filter(([, count]) => Number(count) >= csvData.row_count)
+      .map(([column]) => column);
+  
+    return {
+      totalMissing,
+      emptyColumns,
+      hasMissingValues: totalMissing > 0,
+      status:
+        totalMissing === 0 && emptyColumns.length === 0
+          ? 'Dataset looks healthy'
+          : 'Dataset needs review',
+    };
+  }, [csvData]);
+
   const reviewSummary = useMemo(() => {
     if (!scanData) return [];
     return [
@@ -1690,6 +1758,7 @@ function App() {
   const getCurrentScanPayload = () => ({
     preset: scanPreset,
     customPath: customPath.trim(),
+    csvPath: csvPath.trim(),
   });
 
   const getFilterMatchCount = (filter: Exclude<QueueFilter, null>) => {
@@ -2386,6 +2455,12 @@ function App() {
                 disabled={isBulkActing}
                 onClick={() => setScanPreset('custom')}
               />
+              <ModePill
+                active={scanPreset === 'csv'}
+                label="CSV Dataset"
+                disabled={isBulkActing}
+                onClick={() => setScanPreset('csv')}
+              />
             </div>
 
             {scanPreset === 'custom' ? (
@@ -2424,6 +2499,42 @@ function App() {
               </div>
             ) : null}
 
+            {scanPreset === 'csv' ? (
+              <div className="flex flex-col gap-2">
+                <label
+                  htmlFor="csv-path"
+                  className="text-sm font-medium text-slate-700"
+                >
+                  CSV file path
+                </label>
+
+                <div className="flex flex-col gap-3 md:flex-row">
+                  <input
+                    id="csv-path"
+                    type="text"
+                    value={csvPath}
+                    disabled={isBulkActing}
+                    onChange={(e) => setCsvPath(e.target.value)}
+                    placeholder="/Users/yourname/Documents/example.csv"
+                    className="flex-1 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
+                  />
+
+                  <button
+                    type="button"
+                    onClick={handleBrowseForCsv}
+                    disabled={isBulkActing}
+                    className="rounded-2xl bg-slate-100 px-4 py-3 text-sm font-medium text-slate-700 transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                  >
+                    Browse…
+                  </button>
+                </div>
+
+                <p className="text-xs text-slate-500">
+                  Enter an absolute path to a CSV file. This scan will inspect the dataset without modifying it.
+                </p>
+              </div>
+            ) : null}
+
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setShowSystemFiles((prev) => !prev)}
@@ -2451,52 +2562,6 @@ function App() {
               }`}
             >
               <p className="text-sm font-medium">{actionStatus.message}</p>
-            </section>
-          ) : null}
-
-          {(sessionState.filesArchived > 0 || sessionState.filesRemoved > 0 || sessionState.filesKept > 0) ? (
-            <section className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
-                    Session Activity
-                  </div>
-
-                  <div className="mt-1 text-sm text-emerald-900">
-                    {sessionState.filesArchived > 0 ? (
-                      <span className="mr-3">
-                        Archived <span className="font-semibold">{sessionState.filesArchived}</span>
-                      </span>
-                    ) : null}
-
-                    {sessionState.filesRemoved > 0 ? (
-                      <span className="mr-3">
-                        Removed <span className="font-semibold">{sessionState.filesRemoved}</span>
-                      </span>
-                    ) : null}
-
-                    {sessionState.filesKept > 0 ? (
-                      <span>
-                        Kept <span className="font-semibold">{sessionState.filesKept}</span>
-                      </span>
-                    ) : null}
-                  </div>
-
-                  <div className="mt-1 text-xs text-emerald-700">
-                    Results reflect the last scan plus this session’s actions.
-                  </div>
-                </div>
-
-                <button
-                  onClick={() => {
-                    dispatchSession({ type: 'RESET_AFTER_RESCAN' });
-                    triggerRescan();
-                  }}
-                  className="rounded-full bg-emerald-900 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
-                >
-                  Refresh Scan
-                </button>
-              </div>
             </section>
           ) : null}
 
@@ -2799,38 +2864,214 @@ function App() {
             </section>
           ) : null}
 
-          {scanData ? (
-            <>
-              <section className="space-y-3">
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-                  <StatCard
-                    label="Files in scope"
-                    value={adjustedTotals.totalFiles}
-                    tone="neutral"
-                  />
+          {csvData ? (
+            <section className="rounded-[2rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                    CSV Dataset Preview
+                  </div>
 
-                  <StatCard
-                    label="Needs decision"
-                    value={adjustedTotals.review}
-                    tone={adjustedTotals.review > 0 ? 'warn' : 'good'}
-                  />
+                  <h3 className="mt-1 text-xl font-semibold text-slate-900">
+                    {csvData.success ? csvData.filename : 'CSV scan failed'}
+                  </h3>
 
-                  <StatCard
-                    label={sessionState.needsRescan ? 'Duplicate groups from last scan' : 'Duplicate groups'}
-                    value={adjustedTotals.duplicateGroups}
-                    tone={scanData.duplicates.length > 0 ? 'warn' : 'good'}
-                  />
-
-                  <StatCard
-                    label="Session actions"
-                    value={adjustedTotals.sessionActions}
-                    tone={adjustedTotals.sessionActions > 0 ? 'good' : 'neutral'}
-                  />
+                  <p className="mt-2 break-all text-sm text-slate-500">
+                    {csvData.path}
+                  </p>
                 </div>
 
-                <div className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm text-slate-500 shadow-sm">
-                  Counts reflect the last scan adjusted by this session’s actions.
-                  Refresh scan to fully reconcile filesystem changes.
+                {csvData.success ? (
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    <span className="rounded-full bg-slate-50 px-3 py-1 text-sm font-medium text-slate-700 ring-1 ring-slate-200">
+                      {(csvData.row_count ?? 0).toLocaleString()} rows
+                    </span>
+
+                    <span className="rounded-full bg-slate-50 px-3 py-1 text-sm font-medium text-slate-700 ring-1 ring-slate-200">
+                      {(csvData.column_count ?? 0).toLocaleString()} columns
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+
+              {!csvData.success ? (
+                <div className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+                  {csvData.error || 'Unknown CSV scan error.'}
+                </div>
+              ) : (
+                <div className="mt-6 space-y-6">
+                  {csvHealth ? (
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4">
+                      <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                            Dataset Health
+                          </div>
+
+                          <div className="mt-1 text-base font-semibold text-slate-900">
+                            {csvHealth.status}
+                          </div>
+
+                          <p className="mt-1 text-sm text-slate-500">
+                            DTM checked basic structure, missing values, and fully empty columns.
+                          </p>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                          <span className="rounded-full bg-white px-3 py-1 text-sm font-medium text-slate-700 ring-1 ring-slate-200">
+                            {csvHealth.totalMissing.toLocaleString()} missing values
+                          </span>
+
+                          <span className="rounded-full bg-white px-3 py-1 text-sm font-medium text-slate-700 ring-1 ring-slate-200">
+                            {csvHealth.emptyColumns.length} empty columns
+                          </span>
+                        </div>
+                      </div>
+
+                      {csvHealth.emptyColumns.length > 0 ? (
+                        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                          <span className="font-semibold">Empty columns:</span>{' '}
+                          {csvHealth.emptyColumns.join(', ')}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  <div>
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                      Columns
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      {(csvData.columns ?? []).map((column) => (
+                        <span
+                          key={column}
+                          className="rounded-full bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200"
+                        >
+                          {column}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                      Missing Values
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {Object.entries(csvData.missing_by_column ?? {}).map(([column, count]) => (
+                        <div
+                          key={column}
+                          className="rounded-2xl bg-slate-50 px-4 py-3"
+                        >
+                          <div className="text-xs font-medium text-slate-500">
+                            {column}
+                          </div>
+
+                          <div className="mt-1 text-lg font-semibold text-slate-900">
+                            {Number(count).toLocaleString()} missing
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </section>
+          ) : null}
+
+          {scanData ? (
+            <section className="space-y-8">
+              <section className="rounded-[2rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
+                <div className="flex flex-wrap items-start justify-between gap-5">
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                      Workspace Progress
+                    </div>
+
+                    <h3 className="mt-1 text-xl font-semibold text-slate-900">
+                      {adjustedTotals.sessionActions === 0
+                        ? 'Ready to improve your workspace'
+                        : 'You are actively improving your workspace'}
+                    </h3>
+
+                    <p className="mt-2 text-sm text-slate-500">
+                      {adjustedTotals.sessionActions === 0
+                        ? 'Start with a few decisions, archives, removals, or duplicate resolutions.'
+                        : `${adjustedTotals.sessionActions} actions taken this session. Refresh scan when ready to fully reconcile filesystem changes.`}
+                    </p>
+                  </div>
+
+                  <div className="grid min-w-[280px] grid-cols-2 gap-3 sm:grid-cols-4">
+                    <div className="rounded-2xl bg-slate-50 px-4 py-3">
+                      <div className="text-xs font-medium text-slate-500">Files in scope</div>
+                      <div className="mt-1 text-2xl font-semibold text-slate-900">
+                        {adjustedTotals.totalFiles}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl bg-emerald-50 px-4 py-3">
+                      <div className="text-xs font-medium text-emerald-700">Needs decision</div>
+                      <div className="mt-1 text-2xl font-semibold text-emerald-900">
+                        {adjustedTotals.review}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl bg-amber-50 px-4 py-3">
+                      <div className="text-xs font-medium text-amber-700">
+                        {sessionState.needsRescan ? 'Duplicates from last scan' : 'Duplicate groups'}
+                      </div>
+                      <div className="mt-1 text-2xl font-semibold text-amber-900">
+                        {adjustedTotals.duplicateGroups}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl bg-sky-50 px-4 py-3">
+                      <div className="text-xs font-medium text-sky-700">Session actions</div>
+                      <div className="mt-1 text-2xl font-semibold text-sky-900">
+                        {adjustedTotals.sessionActions}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-5 flex flex-wrap gap-3 text-sm">
+                  <span className="rounded-full bg-sky-50 px-3 py-1 font-medium text-sky-800">
+                    Archived {sessionState.filesArchived}
+                  </span>
+
+                  <span className="rounded-full bg-rose-50 px-3 py-1 font-medium text-rose-800">
+                    Removed {sessionState.filesRemoved}
+                  </span>
+
+                  <span className="rounded-full bg-emerald-50 px-3 py-1 font-medium text-emerald-800">
+                    Kept {sessionState.filesKept}
+                  </span>
+                </div>
+
+                <div className="mt-5">
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className="h-full bg-slate-900 transition-all duration-500"
+                      style={{
+                        width: `${
+                          scanData
+                            ? Math.min(
+                                100,
+                                (adjustedTotals.sessionActions /
+                                  Math.max(scanData.total_files, 1)) *
+                                  100
+                              )
+                            : 0
+                        }%`,
+                      }}
+                    />
+                  </div>
+
+                  <div className="mt-2 text-xs text-slate-500">
+                    Counts reflect the last scan adjusted by this session’s actions.
+                  </div>
                 </div>
               </section>
 
@@ -3716,9 +3957,9 @@ function App() {
                   ) : (
                 <div />
                 )}
+            </section>
           </section>
-          </>
-            ) : !isScanning ? (
+            ) : !isScanning && !csvData ? (
               <section className="rounded-[2rem] border border-slate-200 bg-white p-10 shadow-sm">
                 <div className="max-w-2xl">
                   <p className="text-sm font-medium uppercase tracking-[0.18em] text-slate-400">

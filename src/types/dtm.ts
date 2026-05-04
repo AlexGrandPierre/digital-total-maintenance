@@ -1,4 +1,10 @@
-export type ScanPreset = 'test' | 'desktop' | 'downloads' | 'documents' | 'custom';
+export type ScanPreset =
+  | 'test'
+  | 'desktop'
+  | 'downloads'
+  | 'documents'
+  | 'custom'
+  | 'csv';
 
 export type SortKey = 'name' | 'age_days' | 'size' | 'confidence' | 'review_priority';
 export type SortDirection = 'asc' | 'desc';
@@ -76,6 +82,29 @@ export type PatternPreview = {
     total: number;
     items: ClassifiedFile[];
   };
+};
+
+export type CsvColumnProfile = {
+  name: string;
+  inferred_type: 'text' | 'number' | 'date' | 'boolean' | 'mixed' | 'empty';
+  non_empty_count: number;
+  empty_count: number;
+  unique_count: number;
+  sample_values: string[];
+};
+
+export type CsvScanResult = {
+  type: 'csv_scan';
+  success: boolean;
+  scanned_at?: string;
+  path: string;
+  filename: string;
+  row_count: number;
+  column_count: number;
+  columns: string[];
+  missing_by_column: Record<string, number>;
+  preview_rows?: Record<string, string | number | null>[];
+  error?: string;
 };
 
 export type ScanResult = {

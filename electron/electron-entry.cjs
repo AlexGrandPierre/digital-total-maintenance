@@ -97,8 +97,41 @@ app.whenReady().then(() => {
     const preset = payload.preset || 'test';
     const customPath = (payload.customPath || '').trim();
     const scanPath = path.join(__dirname, '..', 'modules', 'scan.py');
+    const csvPath = (payload.csvPath || '').trim();
+    const csvScanPath = path.join(__dirname, '..', 'modules', 'csv_scan.py');
 
     let targetPath;
+
+    if (preset === 'csv') {
+      if (!csvPath || !fs.existsSync(csvPath)) {
+        event.sender.send('scan-finished', {
+          output: JSON.stringify({
+            type: 'csv',
+            success: false,
+            path: csvPath,
+            error: csvPath
+              ? `CSV file does not exist: ${csvPath}`
+              : 'No CSV file path was provided.',
+          }),
+        });
+        return;
+      }
+
+      runPythonScript(csvScanPath, [csvPath]).then((result) => {
+        event.sender.send('scan-finished', {
+          output:
+            result.output ||
+            JSON.stringify({
+              type: 'csv',
+              success: false,
+              path: csvPath,
+              error: result.errorOutput || 'CSV scan failed.',
+            }),
+        });
+      });
+
+      return;
+    }
 
     switch (preset) {
       case 'desktop':
@@ -282,6 +315,30 @@ app.whenReady().then(() => {
       };
     }
 
+    return {
+      success: true,
+      path: result.filePaths[0],
+    };
+  });
+
+  ipcMain.handle('browse-for-csv', async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openFile'],
+      filters: [
+        {
+          name: 'CSV Files',
+          extensions: ['csv'],
+        },
+      ],
+    });
+  
+    if (result.canceled || !result.filePaths.length) {
+      return {
+        success: false,
+        path: '',
+      };
+    }
+  
     return {
       success: true,
       path: result.filePaths[0],

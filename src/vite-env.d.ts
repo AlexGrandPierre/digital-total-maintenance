@@ -1,10 +1,9 @@
 /// <reference types="vite/client" />
 
-type ScanPreset = 'test' | 'desktop' | 'downloads' | 'documents' | 'custom';
-
 type ScanRequestPayload = {
-  preset: ScanPreset;
+  preset: 'test' | 'desktop' | 'downloads' | 'documents' | 'custom' | 'csv';
   customPath?: string;
+  csvPath?: string;
 };
 
 type ActionHistoryEntry = {
@@ -18,8 +17,8 @@ type ActionHistoryEntry = {
     | 'restore_from_archive'
     | 'restore_from_trash';
   source_path: string;
-  destination_path: string | null;
-  status: 'success';
+  destination_path?: string | null;
+  status: 'success' | 'error';
   mode: 'single' | 'bulk';
   reverts_history_id?: string | null;
 };
@@ -56,12 +55,17 @@ interface ElectronAPI {
   sendScanRequest?: (payload: ScanRequestPayload) => void;
   onScanFinished?: (callback: (data: { output?: string }) => void) => () => void;
   onScanProgress?: (callback: (data: ScanProgress) => void) => () => void;
+
   moveToReview?: (filePath: string, mode?: 'single' | 'bulk') => Promise<ActionResult>;
   moveToArchive?: (filePath: string, mode?: 'single' | 'bulk') => Promise<ActionResult>;
   moveToTrash?: (filePath: string, mode?: 'single' | 'bulk') => Promise<ActionResult>;
+
   browseForFolder?: () => Promise<BrowseResult>;
+  browseForCsv?: () => Promise<BrowseResult>;
+
   getActionHistory?: (limit?: number) => Promise<ActionHistoryEntry[]>;
   restoreFromHistory?: (entry: ActionHistoryEntry) => Promise<ActionResult>;
+
   clearActionHistory?: () => Promise<{
     success: boolean;
     message: string;
