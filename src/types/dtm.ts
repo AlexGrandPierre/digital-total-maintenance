@@ -93,6 +93,15 @@ export type CsvColumnProfile = {
   sample_values: string[];
 };
 
+export type CsvSuggestion = {
+  id: string;
+  label: string;
+  severity: 'low' | 'medium' | 'high';
+  reason: string;
+  columns?: string[];
+  count?: number;
+};
+
 export type CsvScanResult = {
   type: 'csv_scan';
   success: boolean;
@@ -103,8 +112,45 @@ export type CsvScanResult = {
   column_count: number;
   columns: string[];
   missing_by_column: Record<string, number>;
-  preview_rows?: Record<string, string | number | null>[];
+  preview_rows: Record<string, string | number | null>[];
+  column_profiles: Record<string, CsvColumnProfile>;
+  duplicate_row_count: number;
+  empty_columns: string[];
+  near_empty_columns: string[];
+  suggestions: CsvSuggestion[];
+  data_quality_insights: CsvDataQualityInsight[];
+  suspicious_value_summary: CsvSuspiciousValueSummary;
   error?: string;
+};
+
+export type CsvDataQualityInsight = {
+  id: string;
+  category:
+    | 'duplicates'
+    | 'missing_values'
+    | 'empty_structure'
+    | 'type_quality'
+    | 'suspicious_values';
+  severity: 'low' | 'medium' | 'high';
+  title: string;
+  summary: string;
+  count: number;
+  affected_columns?: string[];
+  recommended_action: string;
+};
+
+export type CsvSuspiciousValueExample = {
+  row_number: number;
+  column: string;
+  value: string;
+  issues: string[];
+};
+
+export type CsvSuspiciousValueSummary = {
+  total: number;
+  by_column: Record<string, number>;
+  by_issue: Record<string, number>;
+  examples: CsvSuspiciousValueExample[];
 };
 
 export type ScanResult = {

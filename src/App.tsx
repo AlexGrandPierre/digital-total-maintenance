@@ -2865,119 +2865,288 @@ function App() {
           ) : null}
 
           {csvData ? (
-            <section className="rounded-[2rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div className="min-w-0 flex-1">
-                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                    CSV Dataset Preview
+            <section className="space-y-6">
+              <section className="rounded-[2rem] border border-sky-100 bg-sky-50/50 px-6 py-5 shadow-sm">
+                <div className="flex flex-wrap items-start justify-between gap-5">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-600">
+                      CSV Dataset
+                    </div>
+
+                    <h3 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
+                      {csvData.success ? csvData.filename : 'CSV scan failed'}
+                    </h3>
+
+                    <p className="mt-2 break-all text-sm text-slate-600">
+                      {csvData.path}
+                    </p>
                   </div>
 
-                  <h3 className="mt-1 text-xl font-semibold text-slate-900">
-                    {csvData.success ? csvData.filename : 'CSV scan failed'}
-                  </h3>
-
-                  <p className="mt-2 break-all text-sm text-slate-500">
-                    {csvData.path}
-                  </p>
-                </div>
-
-                {csvData.success ? (
-                  <div className="flex shrink-0 flex-wrap gap-2">
-                    <span className="rounded-full bg-slate-50 px-3 py-1 text-sm font-medium text-slate-700 ring-1 ring-slate-200">
-                      {(csvData.row_count ?? 0).toLocaleString()} rows
-                    </span>
-
-                    <span className="rounded-full bg-slate-50 px-3 py-1 text-sm font-medium text-slate-700 ring-1 ring-slate-200">
-                      {(csvData.column_count ?? 0).toLocaleString()} columns
-                    </span>
-                  </div>
-                ) : null}
-              </div>
-
-              {!csvData.success ? (
-                <div className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
-                  {csvData.error || 'Unknown CSV scan error.'}
-                </div>
-              ) : (
-                <div className="mt-6 space-y-6">
-                  {csvHealth ? (
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4">
-                      <div className="flex flex-wrap items-start justify-between gap-4">
-                        <div>
-                          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                            Dataset Health
-                          </div>
-
-                          <div className="mt-1 text-base font-semibold text-slate-900">
-                            {csvHealth.status}
-                          </div>
-
-                          <p className="mt-1 text-sm text-slate-500">
-                            DTM checked basic structure, missing values, and fully empty columns.
-                          </p>
+                  {csvData.success ? (
+                    <div className="grid min-w-[280px] grid-cols-3 gap-3">
+                      <div className="rounded-2xl bg-white px-4 py-3 text-center ring-1 ring-sky-100">
+                        <div className="text-2xl font-semibold text-sky-900">
+                          {(csvData.row_count ?? 0).toLocaleString()}
                         </div>
-
-                        <div className="flex flex-wrap gap-2">
-                          <span className="rounded-full bg-white px-3 py-1 text-sm font-medium text-slate-700 ring-1 ring-slate-200">
-                            {csvHealth.totalMissing.toLocaleString()} missing values
-                          </span>
-
-                          <span className="rounded-full bg-white px-3 py-1 text-sm font-medium text-slate-700 ring-1 ring-slate-200">
-                            {csvHealth.emptyColumns.length} empty columns
-                          </span>
-                        </div>
+                        <div className="mt-1 text-xs font-medium text-slate-500">Rows</div>
                       </div>
 
-                      {csvHealth.emptyColumns.length > 0 ? (
-                        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                          <span className="font-semibold">Empty columns:</span>{' '}
-                          {csvHealth.emptyColumns.join(', ')}
+                      <div className="rounded-2xl bg-white px-4 py-3 text-center ring-1 ring-sky-100">
+                        <div className="text-2xl font-semibold text-sky-900">
+                          {(csvData.column_count ?? 0).toLocaleString()}
                         </div>
-                      ) : null}
+                        <div className="mt-1 text-xs font-medium text-slate-500">Columns</div>
+                      </div>
+
+                      <div className="rounded-2xl bg-white px-4 py-3 text-center ring-1 ring-sky-100">
+                        <div className="text-2xl font-semibold text-sky-900">
+                          {(csvData.duplicate_row_count ?? 0).toLocaleString()}
+                        </div>
+                        <div className="mt-1 text-xs font-medium text-slate-500">Duplicates</div>
+                      </div>
                     </div>
                   ) : null}
+                </div>
 
-                  <div>
-                    <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                      Columns
-                    </div>
-
-                    <div className="flex flex-wrap gap-2">
-                      {(csvData.columns ?? []).map((column) => (
-                        <span
-                          key={column}
-                          className="rounded-full bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200"
-                        >
-                          {column}
-                        </span>
-                      ))}
-                    </div>
+                {!csvData.success ? (
+                  <div className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+                    {csvData.error || 'Unknown CSV scan error.'}
                   </div>
+                ) : null}
+              </section>
 
-                  <div>
-                    <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                      Missing Values
-                    </div>
+              {csvData.success ? (
+                <>
+                  <section className="grid grid-cols-1 gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+                    {csvHealth ? (
+                      <section className="rounded-[2rem] border border-emerald-100 bg-emerald-50/60 px-6 py-5 shadow-sm">
+                        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
+                          Dataset Health
+                        </div>
 
-                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                      {Object.entries(csvData.missing_by_column ?? {}).map(([column, count]) => (
-                        <div
-                          key={column}
-                          className="rounded-2xl bg-slate-50 px-4 py-3"
-                        >
-                          <div className="text-xs font-medium text-slate-500">
-                            {column}
+                        <h3 className="mt-1 text-xl font-semibold text-emerald-950">
+                          {csvHealth.status}
+                        </h3>
+
+                        <p className="mt-2 text-sm leading-6 text-emerald-900/80">
+                          DTM checked structure, missing values, duplicate rows, and column completeness.
+                        </p>
+
+                        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3 xl:grid-cols-1">
+                          <div className="rounded-2xl bg-white px-4 py-3 ring-1 ring-emerald-100">
+                            <div className="text-xs font-medium text-emerald-700">Missing values</div>
+                            <div className="mt-1 text-2xl font-semibold text-emerald-950">
+                              {csvHealth.totalMissing.toLocaleString()}
+                            </div>
                           </div>
 
-                          <div className="mt-1 text-lg font-semibold text-slate-900">
-                            {Number(count).toLocaleString()} missing
+                          <div className="rounded-2xl bg-white px-4 py-3 ring-1 ring-emerald-100">
+                            <div className="text-xs font-medium text-emerald-700">Empty columns</div>
+                            <div className="mt-1 text-2xl font-semibold text-emerald-950">
+                              {csvHealth.emptyColumns.length}
+                            </div>
+                          </div>
+
+                          <div className="rounded-2xl bg-white px-4 py-3 ring-1 ring-emerald-100">
+                            <div className="text-xs font-medium text-emerald-700">Near-empty columns</div>
+                            <div className="mt-1 text-2xl font-semibold text-emerald-950">
+                              {(csvData.near_empty_columns ?? []).length}
+                            </div>
+                          </div>
+                        </div>
+                      </section>
+                    ) : null}
+
+                    <section className="rounded-[2rem] border border-amber-100 bg-amber-50/50 px-6 py-5 shadow-sm">
+                      <div className="mb-4 flex items-start justify-between gap-4">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
+                            Data Quality Insights
+                          </div>
+
+                          <h3 className="mt-1 text-xl font-semibold text-amber-950">
+                            What needs attention
+                          </h3>
+                        </div>
+
+                        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-amber-800 ring-1 ring-amber-200">
+                          {(csvData.data_quality_insights ?? []).length} insights
+                        </span>
+                      </div>
+
+                      {(csvData.data_quality_insights ?? []).length > 0 ? (
+                        <div className="space-y-3">
+                          {csvData.data_quality_insights.map((insight) => (
+                            <div
+                              key={insight.id}
+                              className={`rounded-2xl border px-4 py-4 ${
+                                insight.severity === 'high'
+                                  ? 'border-rose-200 bg-rose-50'
+                                  : insight.severity === 'medium'
+                                  ? 'border-amber-200 bg-white'
+                                  : 'border-sky-100 bg-white'
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className="text-sm font-semibold text-slate-900">
+                                    {insight.title}
+                                  </div>
+
+                                  <div className="mt-1 text-xs text-slate-500">
+                                    {insight.category.replace(/_/g, ' ')} ·{' '}
+                                    {insight.count.toLocaleString()} affected
+                                  </div>
+                                </div>
+
+                                <span
+                                  className={`rounded-full px-2.5 py-1 text-[11px] font-medium ring-1 ${
+                                    insight.severity === 'high'
+                                      ? 'bg-rose-100 text-rose-800 ring-rose-200'
+                                      : insight.severity === 'medium'
+                                      ? 'bg-amber-100 text-amber-800 ring-amber-200'
+                                      : 'bg-sky-50 text-sky-800 ring-sky-200'
+                                  }`}
+                                >
+                                  {insight.severity}
+                                </span>
+                              </div>
+
+                              <p className="mt-3 text-sm leading-6 text-slate-600">
+                                {insight.summary}
+                              </p>
+
+                              <div className="mt-3 rounded-xl bg-white/80 px-3 py-2 text-xs leading-5 text-slate-600 ring-1 ring-slate-200">
+                                <span className="font-semibold text-slate-800">
+                                  Recommended action:
+                                </span>{' '}
+                                {insight.recommended_action}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+                          No major data quality insights detected.
+                        </div>
+                      )}
+                    </section>
+                  </section>
+
+                  <section className="rounded-[2rem] border border-sky-100 bg-sky-50/40 px-6 py-5 shadow-sm">
+                    <div className="mb-4 flex items-start justify-between gap-4">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-700">
+                          Column Intelligence
+                        </div>
+
+                        <h3 className="mt-1 text-xl font-semibold text-slate-900">
+                          Structure and value patterns
+                        </h3>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      {Object.values(csvData.column_profiles ?? {}).map((profile) => (
+                        <div
+                          key={profile.name}
+                          className="rounded-2xl border border-sky-100 bg-white px-4 py-4"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-semibold text-slate-900">
+                                {profile.name}
+                              </div>
+
+                              <div className="mt-1 text-xs text-slate-500">
+                                {profile.non_empty_count.toLocaleString()} filled ·{' '}
+                                {profile.empty_count.toLocaleString()} empty
+                              </div>
+                            </div>
+
+                            <span className="rounded-full bg-sky-50 px-2.5 py-1 text-[11px] font-medium text-sky-800 ring-1 ring-sky-200">
+                              {profile.inferred_type}
+                            </span>
+                          </div>
+
+                          <div className="mt-3 text-sm text-slate-700">
+                            <span className="font-semibold">
+                              {profile.unique_count.toLocaleString()}
+                            </span>{' '}
+                            unique value{profile.unique_count === 1 ? '' : 's'}
                           </div>
                         </div>
                       ))}
                     </div>
-                  </div>
-                </div>
-              )}
+                  </section>
+
+                  <section className="rounded-[2rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
+                    <div className="mb-4">
+                      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                        Table Preview
+                      </div>
+
+                      <h3 className="mt-1 text-xl font-semibold text-slate-900">
+                        First rows for visual validation
+                      </h3>
+                    </div>
+
+                    {(csvData.preview_rows ?? []).length === 0 ? (
+                      <div className="rounded-2xl bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                        No preview rows available.
+                      </div>
+                    ) : (
+                      <div className="overflow-hidden rounded-2xl border border-slate-200">
+                        <div className="max-h-[420px] overflow-auto">
+                          <table className="min-w-full border-collapse text-left text-sm">
+                            <thead className="sticky top-0 bg-slate-100 text-xs uppercase tracking-[0.12em] text-slate-500">
+                              <tr>
+                                {(csvData.columns ?? []).map((column) => (
+                                  <th
+                                    key={column}
+                                    className="border-b border-slate-200 px-4 py-3 font-semibold"
+                                  >
+                                    {column}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+
+                            <tbody className="divide-y divide-slate-100 bg-white">
+                              {(csvData.preview_rows ?? []).map((row, rowIndex) => (
+                                <tr key={rowIndex} className="hover:bg-slate-50">
+                                  {(csvData.columns ?? []).map((column) => {
+                                    const value = row[column];
+
+                                    return (
+                                      <td
+                                        key={`${rowIndex}-${column}`}
+                                        className="max-w-[280px] whitespace-nowrap px-4 py-3 text-slate-700"
+                                      >
+                                        <span className="block truncate">
+                                          {value === null ||
+                                          value === undefined ||
+                                          String(value).trim() === ''
+                                            ? '—'
+                                            : String(value)}
+                                        </span>
+                                      </td>
+                                    );
+                                  })}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    <p className="mt-2 text-xs text-slate-500">
+                      Showing a bounded preview only. DTM has not modified the original CSV.
+                    </p>
+                  </section>
+                </>
+              ) : null}
             </section>
           ) : null}
 

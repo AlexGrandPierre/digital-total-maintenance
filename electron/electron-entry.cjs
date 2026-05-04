@@ -106,7 +106,7 @@ app.whenReady().then(() => {
       if (!csvPath || !fs.existsSync(csvPath)) {
         event.sender.send('scan-finished', {
           output: JSON.stringify({
-            type: 'csv',
+            type: 'csv_scan',
             success: false,
             path: csvPath,
             error: csvPath
@@ -122,7 +122,7 @@ app.whenReady().then(() => {
           output:
             result.output ||
             JSON.stringify({
-              type: 'csv',
+              type: 'csv_scan',
               success: false,
               path: csvPath,
               error: result.errorOutput || 'CSV scan failed.',
