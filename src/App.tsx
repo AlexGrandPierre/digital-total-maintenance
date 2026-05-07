@@ -434,7 +434,7 @@ const reviewPriorityRank: Record<'high' | 'medium' | 'low', number> = {
   low: 0,
   medium: 1,
   high: 2,
-};
+}
 
 function compareValues(
   a: ClassifiedFile,
@@ -607,6 +607,8 @@ function App() {
   const [activeQueueFilter, setActiveQueueFilter] = useState<QueueFilter>(null);
 
   const [csvData, setCsvData] = useState<CsvScanResult | null>(null);
+
+  const [lastCsvExportPath, setLastCsvExportPath] = useState<string | null>(null);
 
   const [batchPreview, setBatchPreview] = useState<{
     filter: Exclude<QueueFilter, null>;
@@ -2054,6 +2056,72 @@ function App() {
       return next;
     });
   };
+
+  const handleCsvAction = async (
+    action:
+      | 'export_duplicate_groups'
+      | 'export_suspicious_rows'
+      | 'export_clean_copy'
+  ) => {
+    if (!csvData?.success) return;
+  
+    setActionStatus(null);
+    setLastCsvExportPath(null);
+  
+    try {
+      const result = await window.electronAPI?.runCsvAction?.({
+        action,
+        csv_path: csvData.path,
+        duplicate_groups: csvData.duplicate_groups ?? [],
+        suspicious_examples: csvData.suspicious_value_summary?.examples ?? [],
+        suspicious_row_numbers: csvData.suspicious_value_summary?.row_numbers ?? [],
+      
+        remove_empty_columns: true,
+        remove_empty_rows: true,
+        trim_whitespace: true,
+        exclude_duplicate_rows: true,
+        exclude_suspicious_rows: true,
+      });
+  
+      if (result?.success) {
+        setLastCsvExportPath(result.export_path || null);
+      }
+  
+      setActionStatus({
+        tone: result?.success ? 'success' : 'error',
+        message: result?.success
+          ? `${result.message} Export path: ${result.export_path}`
+          : result?.message || 'CSV action failed.',
+      });
+    } catch (error) {
+      setActionStatus({
+        tone: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Unexpected CSV action failure.',
+      });
+    }
+  };
+
+  const handleOpenCsvExportFolder = async () => {
+    try {
+      const result = await window.electronAPI?.openCsvExportFolder?.();
+  
+      setActionStatus({
+        tone: result?.success ? 'success' : 'error',
+        message: result?.message || 'Unable to open export folder.',
+      });
+    } catch (error) {
+      setActionStatus({
+        tone: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Unexpected failure opening CSV export folder.',
+      });
+    }
+  };
   
   const selectedBatchItems = useMemo(() => {
     if (!batchPreview) return [];
@@ -3031,6 +3099,221 @@ function App() {
                         </div>
                       )}
                     </section>
+                  </section>
+
+                  <section className="rounded-[2rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
+                    <div className="mb-4 flex items-start justify-between gap-4">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                          Issue Review Workspace
+                        </div>
+
+                        <h3 className="mt-1 text-xl font-semibold text-slate-900">
+                          Review flagged records before taking action
+                        </h3>
+
+                        <p className="mt-2 text-sm leading-6 text-slate-500">
+                          DTM groups likely duplicate records and suspicious values so you can inspect them before exporting or cleaning.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="mb-4 flex items-start justify-between gap-4">
+                      <button
+                          onClick={() => handleCsvAction('export_clean_copy')}
+                          className="rounded-full bg-emerald-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-emerald-800"
+                        >
+                          Export clean copy
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+                      <div className="rounded-[1.5rem] border border-amber-200 bg-amber-50/50 px-5 py-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
+                              Duplicate Groups
+                            </div>
+
+                            <h4 className="mt-1 text-base font-semibold text-amber-950">
+                              {(csvData.duplicate_groups ?? []).length} group
+                              {(csvData.duplicate_groups ?? []).length === 1 ? '' : 's'} detected
+                            </h4>
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() => handleCsvAction('export_duplicate_groups')}
+                          disabled={(csvData.duplicate_groups ?? []).length === 0}
+                          className="rounded-full bg-amber-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                        >
+                          Export duplicate rows
+                        </button>
+
+                        {(csvData.duplicate_groups ?? []).length === 0 ? (
+                          <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+                            No duplicate-like record groups detected.
+                          </div>
+                        ) : (
+                          <div className="mt-4 max-h-[420px] space-y-3 overflow-y-auto pr-1">
+                            {(csvData.duplicate_groups ?? []).map((group, index) => (
+                              <div
+                                key={group.group_id}
+                                className="rounded-2xl border border-amber-200 bg-white px-4 py-4"
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <div className="text-sm font-semibold text-slate-900">
+                                      Duplicate Group {index + 1}
+                                    </div>
+
+                                    <div className="mt-1 text-xs text-slate-500">
+                                      {group.rows_total} rows · confidence: {group.confidence}
+                                    </div>
+                                  </div>
+
+                                  <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200">
+                                    review
+                                  </span>
+                                </div>
+
+                                <p className="mt-3 text-sm leading-6 text-slate-600">
+                                  {group.reason}
+                                </p>
+
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                  {group.matching_columns.map((column) => (
+                                    <span
+                                      key={`${group.group_id}-${column}`}
+                                      className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200"
+                                    >
+                                      {column}
+                                    </span>
+                                  ))}
+                                </div>
+
+                                {group.varying_id_columns.length > 0 ? (
+                                  <div className="mt-3 rounded-xl bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-900 ring-1 ring-sky-100">
+                                    ID-like fields differ:{' '}
+                                    <span className="font-semibold">
+                                      {group.varying_id_columns.join(', ')}
+                                    </span>
+                                  </div>
+                                ) : null}
+
+                                <div className="mt-4 space-y-2">
+                                  {group.rows.map((row) => (
+                                    <div
+                                      key={`${group.group_id}-${row.row_number}`}
+                                      className="rounded-xl bg-slate-50 px-3 py-3"
+                                    >
+                                      <div className="text-xs font-semibold text-slate-500">
+                                        Row {row.row_number}
+                                      </div>
+
+                                      <div className="mt-2 grid grid-cols-1 gap-2 text-xs text-slate-700">
+                                        {group.matching_columns.slice(0, 4).map((column) => (
+                                          <div key={`${row.row_number}-${column}`} className="break-all">
+                                            <span className="font-semibold">{column}:</span>{' '}
+                                            {row.values[column] || '—'}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+
+                                {group.hidden_rows_count > 0 ? (
+                                  <div className="mt-3 text-xs text-slate-500">
+                                    {group.hidden_rows_count} additional row
+                                    {group.hidden_rows_count === 1 ? '' : 's'} hidden in this bounded preview.
+                                  </div>
+                                ) : null}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="rounded-[1.5rem] border border-rose-200 bg-rose-50/40 px-5 py-4">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-rose-700">
+                            Suspicious Values
+                          </div>
+
+                          <h4 className="mt-1 text-base font-semibold text-rose-950">
+                            {(csvData.suspicious_value_summary?.total ?? 0).toLocaleString()} suspicious cell
+                            {(csvData.suspicious_value_summary?.total ?? 0) === 1 ? '' : 's'}
+                          </h4>
+                        </div>
+
+                        <button
+                          onClick={() => handleCsvAction('export_suspicious_rows')}
+                          disabled={(csvData.suspicious_value_summary?.examples ?? []).length === 0}
+                          className="rounded-full bg-rose-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-rose-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                        >
+                          Export suspicious rows
+                        </button>
+
+                        {(csvData.suspicious_value_summary?.examples ?? []).length === 0 ? (
+                          <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+                            No suspicious value examples detected.
+                          </div>
+                        ) : (
+                          <div className="mt-4 max-h-[420px] space-y-3 overflow-y-auto pr-1">
+                            {(csvData.suspicious_value_summary?.examples ?? []).map((example, index) => (
+                              <div
+                                key={`${example.row_number}-${example.column}-${index}`}
+                                className="rounded-2xl border border-rose-200 bg-white px-4 py-4"
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <div className="text-sm font-semibold text-slate-900">
+                                      Row {example.row_number}
+                                    </div>
+
+                                    <div className="mt-1 text-xs text-slate-500">
+                                      Column: {example.column}
+                                    </div>
+                                  </div>
+
+                                  <span className="rounded-full bg-rose-100 px-2.5 py-1 text-[11px] font-medium text-rose-800 ring-1 ring-rose-200">
+                                    review
+                                  </span>
+                                </div>
+
+                                <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-700 break-all">
+                                  {example.value || '—'}
+                                </div>
+
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                  {example.issues.map((issue) => (
+                                    <span
+                                      key={`${example.row_number}-${example.column}-${issue}`}
+                                      className="rounded-full bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-800 ring-1 ring-rose-200"
+                                    >
+                                      {issue.replace(/_/g, ' ')}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mb-4 flex items-start justify-between gap-4">
+                      {lastCsvExportPath ? (
+                        <button
+                          onClick={handleOpenCsvExportFolder}
+                          className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
+                        >
+                          Open Export Folder
+                        </button>
+                      ) : null}
+                    </div>
+
                   </section>
 
                   <section className="rounded-[2rem] border border-sky-100 bg-sky-50/40 px-6 py-5 shadow-sm">

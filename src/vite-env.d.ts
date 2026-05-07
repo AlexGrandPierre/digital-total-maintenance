@@ -70,6 +70,34 @@ interface ElectronAPI {
     success: boolean;
     message: string;
   }>;
+
+  runCsvAction?: (payload: {
+    action:
+  | 'export_duplicate_groups'
+  | 'export_suspicious_rows'
+  | 'export_clean_copy';
+    csv_path: string;
+    duplicate_groups?: unknown[];
+    suspicious_examples?: unknown[];
+    suspicious_row_numbers?: number[];
+    remove_empty_columns?: boolean;
+    remove_empty_rows?: boolean;
+    trim_whitespace?: boolean;
+    exclude_duplicate_rows?: boolean;
+    exclude_suspicious_rows?: boolean;
+  }) => Promise<{
+    success: boolean;
+    action?: string;
+    message: string;
+    export_path?: string;
+    row_count?: number;
+  }>;
+
+  openCsvExportFolder?: () => Promise<{
+    success: boolean;
+    message: string;
+    path?: string;
+  }>;
 }
 
 interface Window {

@@ -29,4 +29,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getActionHistory: (limit = 20) => ipcRenderer.invoke('get-action-history', { limit }),
   restoreFromHistory: (entry) => ipcRenderer.invoke('restore-from-history', { entry }),
   clearActionHistory: () => ipcRenderer.invoke('clear-action-history'),
+  runCsvAction: (payload) => ipcRenderer.invoke('csv-action', payload),
+  openCsvExportFolder: () => ipcRenderer.invoke('open-csv-export-folder'),
 });

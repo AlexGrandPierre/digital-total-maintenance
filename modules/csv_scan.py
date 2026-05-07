@@ -1,15 +1,45 @@
 import csv
+import hashlib
 import json
 import os
 import re
 import sys
 from datetime import datetime
-from collections import Counter
+from collections import Counter, defaultdict
 
 
 PREVIEW_ROW_LIMIT = 10
 SAMPLE_VALUE_LIMIT = 5
 SUSPICIOUS_EXAMPLE_LIMIT = 12
+DUPLICATE_GROUP_LIMIT = 25
+DUPLICATE_GROUP_ROW_LIMIT = 12
+
+
+IDENTITY_COLUMN_HINTS = [
+    "first name",
+    "firstname",
+    "given name",
+    "last name",
+    "lastname",
+    "surname",
+    "family name",
+    "date of birth",
+    "dob",
+    "birth date",
+    "birthdate",
+    "gender",
+    "sex",
+]
+
+ID_COLUMN_HINTS = [
+    "id",
+    "uuid",
+    "guid",
+    "key",
+    "code",
+    "number",
+    "no.",
+]
 
 
 def is_number(value):
@@ -85,6 +115,58 @@ def normalize_cell(value):
     return str(value).strip()
 
 
+def normalize_for_matching(value):
+    value = normalize_cell(value).lower()
+    value = re.sub(r"\s+", " ", value)
+    return value
+
+
+def normalize_column_name(column):
+    return re.sub(r"[_\-]+", " ", column.strip().lower())
+
+
+def looks_like_id_column(column):
+    normalized = normalize_column_name(column)
+
+    if normalized in {"id", "record id", "row id"}:
+        return True
+
+    return any(hint in normalized for hint in ID_COLUMN_HINTS)
+
+
+def get_identity_like_columns(columns):
+    identity_columns = []
+
+    for column in columns:
+        normalized = normalize_column_name(column)
+
+        if any(hint == normalized or hint in normalized for hint in IDENTITY_COLUMN_HINTS):
+            identity_columns.append(column)
+
+    return identity_columns
+
+
+def build_duplicate_key_columns(columns):
+    identity_columns = get_identity_like_columns(columns)
+
+    if len(identity_columns) >= 2:
+        return identity_columns
+
+    non_id_columns = [
+        column for column in columns if not looks_like_id_column(column)
+    ]
+
+    if len(non_id_columns) >= 2:
+        return non_id_columns
+
+    return columns
+
+
+def make_group_id(values):
+    raw = "|".join(values)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+
+
 def contains_suspicious_characters(value):
     value = str(value)
 
@@ -97,10 +179,16 @@ def contains_suspicious_characters(value):
     if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", value):
         return True
 
-    if re.search(r"[^\x00-\x7F]", value):
-        return True
-
     return False
+
+
+def contains_non_ascii_characters(value):
+    value = str(value)
+
+    if not value:
+        return False
+
+    return bool(re.search(r"[^\x00-\x7F]", value))
 
 
 def is_suspicious_default_date(value):
@@ -137,14 +225,20 @@ def inspect_suspicious_value(column, value):
     if contains_suspicious_characters(value):
         issues.append("suspicious_characters")
 
+    column_lower = column.lower()
+    value_lower = str(value).strip().lower()
+
+    if contains_non_ascii_characters(value) and any(
+        hint in column_lower
+        for hint in ["id", "code", "email", "date", "number"]
+    ):
+        issues.append("unexpected_non_ascii_in_structured_field")
+
     if is_suspicious_default_date(value):
         issues.append("default_or_placeholder_date")
 
     if is_very_old_date(value):
         issues.append("very_old_date")
-
-    column_lower = column.lower()
-    value_lower = str(value).strip().lower()
 
     if "email" in column_lower and value_lower and "@" not in value_lower:
         issues.append("email_like_column_without_email_format")
@@ -155,10 +249,90 @@ def inspect_suspicious_value(column, value):
     return issues
 
 
+def build_duplicate_groups(row_records, columns):
+    key_columns = build_duplicate_key_columns(columns)
+
+    grouped = defaultdict(list)
+
+    for record in row_records:
+        key_values = [
+            normalize_for_matching(record["values"].get(column, ""))
+            for column in key_columns
+        ]
+
+        if not any(key_values):
+            continue
+
+        grouped[tuple(key_values)].append(record)
+
+    duplicate_groups = []
+
+    for key_values, records in grouped.items():
+        if len(records) < 2:
+            continue
+
+        varying_id_columns = []
+
+        for column in columns:
+            if not looks_like_id_column(column):
+                continue
+
+            unique_values = {
+                normalize_for_matching(record["values"].get(column, ""))
+                for record in records
+                if normalize_for_matching(record["values"].get(column, ""))
+            }
+
+            if len(unique_values) > 1:
+                varying_id_columns.append(column)
+
+        confidence = "high" if len(key_columns) >= 3 else "medium"
+
+        reason = (
+            f"{len(records)} rows share the same values across "
+            f"{len(key_columns)} duplicate-check column(s)."
+        )
+
+        if varying_id_columns:
+            reason += (
+                " One or more ID-like fields differ, which may indicate separate records "
+                "describing the same real-world entity."
+            )
+
+        duplicate_groups.append({
+            "group_id": f"csv-{make_group_id(list(key_values))}",
+            "confidence": confidence,
+            "reason": reason,
+            "matching_columns": key_columns,
+            "varying_id_columns": varying_id_columns,
+            "rows": [
+                {
+                    "row_number": record["row_number"],
+                    "values": {
+                        column: record["values"].get(column, "")
+                        for column in columns
+                    },
+                }
+                for record in records[:DUPLICATE_GROUP_ROW_LIMIT]
+            ],
+            "row_numbers": [record["row_number"] for record in records],
+            "rows_total": len(records),
+            "hidden_rows_count": max(0, len(records) - DUPLICATE_GROUP_ROW_LIMIT),
+        })
+
+    duplicate_groups.sort(
+        key=lambda group: (group["rows_total"], group["confidence"] == "high"),
+        reverse=True,
+    )
+
+    return duplicate_groups[:DUPLICATE_GROUP_LIMIT]
+
+
 def build_data_quality_insights(
     row_count,
     missing_by_column,
     duplicate_row_count,
+    duplicate_groups,
     empty_columns,
     near_empty_columns,
     column_profiles,
@@ -168,20 +342,31 @@ def build_data_quality_insights(
 
     total_missing = sum(missing_by_column.values())
 
-    if duplicate_row_count > 0:
-        severity = "high" if duplicate_row_count / max(row_count, 1) >= 0.05 else "medium"
+    grouped_duplicate_rows = sum(
+        max(0, group.get("rows_total", 0) - 1)
+        for group in duplicate_groups
+    )
+
+    duplicate_signal_count = max(duplicate_row_count, grouped_duplicate_rows)
+
+    if duplicate_signal_count > 0:
+        severity = (
+            "high"
+            if duplicate_signal_count / max(row_count, 1) >= 0.05
+            else "medium"
+        )
 
         insights.append({
             "id": "duplicate_records",
             "category": "duplicates",
             "severity": severity,
-            "title": "Duplicate records detected",
+            "title": "Potential duplicate records detected",
             "summary": (
-                f"{duplicate_row_count} duplicate row(s) were found. "
-                "Duplicate records can create confusion during review, reporting, import, or migration workflows."
+                f"{duplicate_signal_count} duplicate-like row(s) were detected. "
+                "Some records may differ by ID while sharing enough stable metadata to require review."
             ),
-            "count": duplicate_row_count,
-            "recommended_action": "Review duplicate rows before using this dataset as a source of truth.",
+            "count": duplicate_signal_count,
+            "recommended_action": "Review duplicate groups before using this dataset as a source of truth.",
         })
 
     if total_missing > 0:
@@ -271,8 +456,8 @@ def build_data_quality_insights(
             "severity": severity,
             "title": "Suspicious values detected",
             "summary": (
-                f"{suspicious_total} suspicious value(s) were found across "
-                f"{len(affected_columns)} column(s). These may include unusual characters, placeholder dates, "
+                f"{suspicious_total} suspicious cell(s) were found across "
+                f"{len(affected_columns)} column(s). These may include unsupported characters, placeholder dates, "
                 "very old dates, or values that do not match expected column patterns."
             ),
             "count": suspicious_total,
@@ -297,6 +482,7 @@ def empty_csv_result(csv_path, error):
         "preview_rows": [],
         "column_profiles": {},
         "duplicate_row_count": 0,
+        "duplicate_groups": [],
         "empty_columns": [],
         "near_empty_columns": [],
         "suggestions": [],
@@ -306,6 +492,7 @@ def empty_csv_result(csv_path, error):
             "by_column": {},
             "by_issue": {},
             "examples": [],
+            "row_numbers": [],
         },
     }
 
@@ -320,10 +507,12 @@ def scan_csv(csv_path):
     preview_rows = []
     row_count = 0
     row_signatures = Counter()
+    row_records = []
 
     suspicious_by_column = Counter()
     suspicious_by_issue = Counter()
     suspicious_examples = []
+    suspicious_row_numbers = set()
 
     try:
         with open(csv_path, "r", encoding="utf-8-sig", newline="") as file:
@@ -340,6 +529,11 @@ def scan_csv(csv_path):
                     column: normalize_cell(row.get(column, ""))
                     for column in columns
                 }
+
+                row_records.append({
+                    "row_number": row_count,
+                    "values": normalized_row,
+                })
 
                 if len(preview_rows) < PREVIEW_ROW_LIMIT:
                     preview_rows.append(normalized_row)
@@ -361,7 +555,9 @@ def scan_csv(csv_path):
                     if issues:
                         suspicious_by_column[column] += 1
 
-                        for issue in issues:
+                        suspicious_row_numbers.add(row_count)
+
+                        for issue in set(issues):
                             suspicious_by_issue[issue] += 1
 
                         if len(suspicious_examples) < SUSPICIOUS_EXAMPLE_LIMIT:
@@ -375,6 +571,8 @@ def scan_csv(csv_path):
         duplicate_row_count = sum(
             count - 1 for count in row_signatures.values() if count > 1
         )
+
+        duplicate_groups = build_duplicate_groups(row_records, columns)
 
         column_profiles = {}
         empty_columns = []
@@ -407,6 +605,7 @@ def scan_csv(csv_path):
             "by_column": dict(suspicious_by_column),
             "by_issue": dict(suspicious_by_issue),
             "examples": suspicious_examples,
+            "row_numbers": sorted(suspicious_row_numbers),
         }
 
         suggestions = []
@@ -429,13 +628,13 @@ def scan_csv(csv_path):
                 "columns": near_empty_columns,
             })
 
-        if duplicate_row_count > 0:
+        if duplicate_groups or duplicate_row_count > 0:
             suggestions.append({
-                "id": "review_duplicate_rows",
-                "label": "Review duplicate rows",
+                "id": "review_duplicate_records",
+                "label": "Review duplicate records",
                 "severity": "medium",
-                "reason": f"{duplicate_row_count} duplicate row(s) detected.",
-                "count": duplicate_row_count,
+                "reason": f"{len(duplicate_groups)} duplicate-like group(s) detected.",
+                "count": len(duplicate_groups),
             })
 
         if suspicious_value_summary["total"] > 0:
@@ -443,7 +642,7 @@ def scan_csv(csv_path):
                 "id": "review_suspicious_values",
                 "label": "Review suspicious values",
                 "severity": "medium",
-                "reason": f"{suspicious_value_summary['total']} suspicious value(s) detected.",
+                "reason": f"{suspicious_value_summary['total']} suspicious cell(s) detected.",
                 "count": suspicious_value_summary["total"],
             })
 
@@ -451,6 +650,7 @@ def scan_csv(csv_path):
             row_count=row_count,
             missing_by_column=missing_by_column,
             duplicate_row_count=duplicate_row_count,
+            duplicate_groups=duplicate_groups,
             empty_columns=empty_columns,
             near_empty_columns=near_empty_columns,
             column_profiles=column_profiles,
@@ -470,6 +670,7 @@ def scan_csv(csv_path):
             "preview_rows": preview_rows,
             "column_profiles": column_profiles,
             "duplicate_row_count": duplicate_row_count,
+            "duplicate_groups": duplicate_groups,
             "empty_columns": empty_columns,
             "near_empty_columns": near_empty_columns,
             "suggestions": suggestions,

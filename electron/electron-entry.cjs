@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -494,6 +494,49 @@ app.whenReady().then(() => {
       return {
         success: false,
         message: error.message || 'Failed to clear action history.',
+      };
+    }
+  });
+
+  ipcMain.handle('csv-action', async (_event, payload = {}) => {
+    const csvActionPath = path.join(__dirname, '..', 'modules', 'csv_action.py');
+  
+    const result = await runPythonScript(csvActionPath, [
+      '--app-data',
+      getAppDataPath(),
+      JSON.stringify(payload),
+    ]);
+  
+    try {
+      return JSON.parse(result.output || '{}');
+    } catch {
+      return {
+        success: false,
+        message: result.errorOutput || result.output || 'Failed to parse CSV action result.',
+      };
+    }
+  });
+
+  ipcMain.handle('open-csv-export-folder', async () => {
+    const exportDir = path.join(app.getPath('desktop'), 'DTM-Exports');
+  
+    try {
+      if (!fs.existsSync(exportDir)) {
+        fs.mkdirSync(exportDir, { recursive: true });
+      }
+  
+      await shell.openPath(exportDir);
+  
+      return {
+        success: true,
+        message: `Opened export folder: ${exportDir}`,
+        path: exportDir,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.message || 'Failed to open CSV export folder.',
+        path: exportDir,
       };
     }
   });

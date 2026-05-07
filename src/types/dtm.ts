@@ -115,6 +115,7 @@ export type CsvScanResult = {
   preview_rows: Record<string, string | number | null>[];
   column_profiles: Record<string, CsvColumnProfile>;
   duplicate_row_count: number;
+  duplicate_groups: CsvDuplicateGroup[];
   empty_columns: string[];
   near_empty_columns: string[];
   suggestions: CsvSuggestion[];
@@ -151,6 +152,24 @@ export type CsvSuspiciousValueSummary = {
   by_column: Record<string, number>;
   by_issue: Record<string, number>;
   examples: CsvSuspiciousValueExample[];
+  row_numbers: number[];
+};
+
+export type CsvDuplicateGroupRow = {
+  row_number: number;
+  values: Record<string, string>;
+};
+
+export type CsvDuplicateGroup = {
+  group_id: string;
+  confidence: 'high' | 'medium';
+  reason: string;
+  matching_columns: string[];
+  varying_id_columns: string[];
+  rows: CsvDuplicateGroupRow[];
+  row_numbers: number[];
+  rows_total: number;
+  hidden_rows_count: number;
 };
 
 export type ScanResult = {
