@@ -117,16 +117,63 @@ app.whenReady().then(() => {
         return;
       }
 
-      runPythonScript(csvScanPath, [csvPath]).then((result) => {
+      const py = spawn('python3', [csvScanPath, csvPath]);
+
+      let buffer = '';
+      let errorOutput = '';
+      let finalResult = null;
+
+      py.stdout.on('data', (data) => {
+        buffer += data.toString();
+
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+
+          if (!trimmed) continue;
+
+          try {
+            const parsed = JSON.parse(trimmed);
+
+            if (parsed.type === 'csv_progress') {
+              event.sender.send('scan-progress', parsed);
+            } else {
+              finalResult = parsed;
+            }
+          } catch {
+            // ignore malformed lines
+          }
+        }
+      });
+
+      py.stderr.on('data', (data) => {
+        errorOutput += data.toString();
+      });
+
+      py.on('close', () => {
         event.sender.send('scan-finished', {
           output:
-            result.output ||
-            JSON.stringify({
-              type: 'csv_scan',
-              success: false,
-              path: csvPath,
-              error: result.errorOutput || 'CSV scan failed.',
-            }),
+            finalResult
+              ? JSON.stringify(finalResult)
+              : JSON.stringify({
+                  type: 'csv',
+                  success: false,
+                  path: csvPath,
+                  error: errorOutput || 'CSV scan failed.',
+                }),
+        });
+      });
+
+      py.on('error', (err) => {
+        event.sender.send('scan-finished', {
+          output: JSON.stringify({
+            type: 'csv',
+            success: false,
+            path: csvPath,
+            error: err.message,
+          }),
         });
       });
 

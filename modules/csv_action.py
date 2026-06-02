@@ -61,20 +61,38 @@ def export_duplicate_groups(app_data_path, csv_path, duplicate_groups):
         row["row_number"]: row for row in source_rows
     }
 
-    target_row_numbers = []
+    export_rows = []
 
-    for group in duplicate_groups:
-        for row_number in group.get("row_numbers", []):
-            if isinstance(row_number, int):
-                target_row_numbers.append(row_number)
+    for group_index, group in enumerate(duplicate_groups, start=1):
+        group_id = group.get("group_id", f"group_{group_index}")
+        confidence = group.get("confidence", "")
+        reason = group.get("reason", "")
+        matching_columns = ", ".join(group.get("matching_columns", []))
+        varying_id_columns = ", ".join(group.get("varying_id_columns", []))
 
-    unique_target_row_numbers = sorted(set(target_row_numbers))
+        row_numbers = [
+            row_number
+            for row_number in group.get("row_numbers", [])
+            if isinstance(row_number, int)
+        ]
 
-    export_rows = [
-        source_by_row_number[row_number]
-        for row_number in unique_target_row_numbers
-        if row_number in source_by_row_number
-    ]
+        for group_row_index, row_number in enumerate(row_numbers, start=1):
+            source_row = source_by_row_number.get(row_number)
+
+            if not source_row:
+                continue
+
+            export_rows.append({
+                "row_number": row_number,
+                "values": source_row["values"],
+                "group_number": group_index,
+                "group_id": group_id,
+                "group_row_index": group_row_index,
+                "confidence": confidence,
+                "reason": reason,
+                "matching_columns": matching_columns,
+                "varying_id_columns": varying_id_columns,
+            })
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     base_name = safe_filename(os.path.splitext(os.path.basename(csv_path))[0])
@@ -83,14 +101,32 @@ def export_duplicate_groups(app_data_path, csv_path, duplicate_groups):
         f"{base_name}_duplicate_groups_{timestamp}.csv",
     )
 
-    write_rows(export_path, columns, export_rows)
+    output_columns = [
+        "DTM Duplicate Group",
+        *columns,
+    ]
+
+    with open(export_path, "w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=output_columns)
+        writer.writeheader()
+
+        for row in export_rows:
+            output_row = {
+                "DTM Duplicate Group": row["group_number"],
+            }
+
+            for column in columns:
+                output_row[column] = row["values"].get(column, "")
+
+            writer.writerow(output_row)
 
     return {
         "success": True,
         "action": "export_duplicate_groups",
-        "message": f"Exported {len(export_rows)} duplicate-group row(s).",
+        "message": f"Exported {len(export_rows)} duplicate-group row(s) across {len(duplicate_groups)} group(s).",
         "export_path": export_path,
         "row_count": len(export_rows),
+        "group_count": len(duplicate_groups),
     }
 
 
@@ -148,6 +184,7 @@ def export_clean_copy(
     app_data_path,
     csv_path,
     duplicate_groups=None,
+    duplicate_row_numbers_to_exclude=None,
     suspicious_examples=None,
     suspicious_row_numbers=None,
     remove_empty_columns=True,
@@ -161,16 +198,20 @@ def export_clean_copy(
 
     duplicate_row_numbers = set()
 
-    for group in duplicate_groups or []:
-        row_numbers = [
-            row_number
-            for row_number in group.get("row_numbers", [])
-            if isinstance(row_number, int)
-        ]
-
-        # Keep first row as representative, exclude later duplicate-like rows.
-        for row_number in row_numbers[1:]:
+    for row_number in duplicate_row_numbers_to_exclude or []:
+        if isinstance(row_number, int):
             duplicate_row_numbers.add(row_number)
+
+    if not duplicate_row_numbers:
+        for group in duplicate_groups or []:
+            row_numbers = [
+                row_number
+                for row_number in group.get("row_numbers", [])
+                if isinstance(row_number, int)
+            ]
+
+            for row_number in row_numbers[1:]:
+                duplicate_row_numbers.add(row_number)
 
     suspicious_rows = set()
 
@@ -292,6 +333,7 @@ def run_action(app_data_path, payload):
             app_data_path=app_data_path,
             csv_path=csv_path,
             duplicate_groups=payload.get("duplicate_groups", []),
+            duplicate_row_numbers_to_exclude=payload.get("duplicate_row_numbers_to_exclude", []),
             suspicious_examples=payload.get("suspicious_examples", []),
             suspicious_row_numbers=payload.get("suspicious_row_numbers", []),
             remove_empty_columns=payload.get("remove_empty_columns", True),

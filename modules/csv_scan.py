@@ -4,16 +4,16 @@ import json
 import os
 import re
 import sys
+import time
+from collections import Counter
 from datetime import datetime
-from collections import Counter, defaultdict
 
 
 PREVIEW_ROW_LIMIT = 10
 SAMPLE_VALUE_LIMIT = 5
-SUSPICIOUS_EXAMPLE_LIMIT = 12
+SUSPICIOUS_EXAMPLE_LIMIT = 25
 DUPLICATE_GROUP_LIMIT = 25
-DUPLICATE_GROUP_ROW_LIMIT = 12
-
+DUPLICATE_GROUP_ROW_LIMIT = 8
 
 IDENTITY_COLUMN_HINTS = [
     "first name",
@@ -31,98 +31,36 @@ IDENTITY_COLUMN_HINTS = [
     "sex",
 ]
 
-ID_COLUMN_HINTS = [
-    "id",
-    "uuid",
-    "guid",
-    "key",
-    "code",
-    "number",
-    "no.",
-]
+ID_COLUMN_HINTS = ["id", "uuid", "guid", "key", "code", "number", "no."]
+
+SCAN_STARTED_AT = time.time()
 
 
-def is_number(value):
-    try:
-        float(value)
-        return True
-    except (TypeError, ValueError):
-        return False
+def emit_progress(rows_scanned, current_stage):
+    elapsed_seconds = round(time.time() - SCAN_STARTED_AT, 1)
 
-
-def is_boolean(value):
-    return str(value).strip().lower() in {
-        "true", "false", "yes", "no", "1", "0"
-    }
-
-
-def parse_date(value):
-    value = str(value).strip()
-    if not value:
-        return None
-
-    date_formats = [
-        "%Y-%m-%d",
-        "%d/%m/%Y",
-        "%m/%d/%Y",
-        "%Y/%m/%d",
-        "%d-%m-%Y",
-        "%m-%d-%Y",
-        "%Y-%m-%d %H:%M:%S",
-    ]
-
-    for fmt in date_formats:
-        try:
-            return datetime.strptime(value, fmt)
-        except ValueError:
-            continue
-
-    return None
-
-
-def is_date_like(value):
-    return parse_date(value) is not None
-
-
-def infer_type(values):
-    non_empty = [str(v).strip() for v in values if str(v).strip() != ""]
-
-    if not non_empty:
-        return "empty"
-
-    checks = {
-        "number": sum(1 for v in non_empty if is_number(v)),
-        "date": sum(1 for v in non_empty if is_date_like(v)),
-        "boolean": sum(1 for v in non_empty if is_boolean(v)),
-    }
-
-    total = len(non_empty)
-
-    for inferred_type, count in checks.items():
-        if count == total:
-            return inferred_type
-
-    if max(checks.values()) >= max(2, int(total * 0.8)):
-        return "mixed"
-
-    return "text"
+    print(json.dumps({
+        "type": "csv_progress",
+        "status": "scanning",
+        "target": "CSV Dataset",
+        "rows_scanned": rows_scanned,
+        "elapsed_seconds": elapsed_seconds,
+        "current_stage": current_stage,
+    }), flush=True)
 
 
 def normalize_cell(value):
-    if value is None:
-        return ""
+    return "" if value is None else str(value).strip()
 
-    return str(value).strip()
+
+def normalize_column_name(column):
+    return re.sub(r"[_\-]+", " ", column.strip().lower())
 
 
 def normalize_for_matching(value):
     value = normalize_cell(value).lower()
     value = re.sub(r"\s+", " ", value)
     return value
-
-
-def normalize_column_name(column):
-    return re.sub(r"[_\-]+", " ", column.strip().lower())
 
 
 def looks_like_id_column(column):
@@ -135,15 +73,15 @@ def looks_like_id_column(column):
 
 
 def get_identity_like_columns(columns):
-    identity_columns = []
+    matched = []
 
     for column in columns:
         normalized = normalize_column_name(column)
 
         if any(hint == normalized or hint in normalized for hint in IDENTITY_COLUMN_HINTS):
-            identity_columns.append(column)
+            matched.append(column)
 
-    return identity_columns
+    return matched
 
 
 def build_duplicate_key_columns(columns):
@@ -152,9 +90,7 @@ def build_duplicate_key_columns(columns):
     if len(identity_columns) >= 2:
         return identity_columns
 
-    non_id_columns = [
-        column for column in columns if not looks_like_id_column(column)
-    ]
+    non_id_columns = [column for column in columns if not looks_like_id_column(column)]
 
     if len(non_id_columns) >= 2:
         return non_id_columns
@@ -167,34 +103,82 @@ def make_group_id(values):
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
 
+def parse_date(value):
+    value = str(value).strip()
+    if not value:
+        return None
+
+    formats = [
+        "%Y-%m-%d",
+        "%d/%m/%Y",
+        "%m/%d/%Y",
+        "%Y/%m/%d",
+        "%d-%m-%Y",
+        "%m-%d-%Y",
+        "%Y-%m-%d %H:%M:%S",
+    ]
+
+    for fmt in formats:
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+
+    return None
+
+
+def is_number(value):
+    try:
+        float(value)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def is_boolean(value):
+    return str(value).strip().lower() in {"true", "false", "yes", "no", "1", "0"}
+
+
+def is_date_like(value):
+    return parse_date(value) is not None
+
+
+def infer_type_from_counts(non_empty_count, number_count, date_count, boolean_count):
+    if non_empty_count == 0:
+        return "empty"
+
+    if number_count == non_empty_count:
+        return "number"
+
+    if date_count == non_empty_count:
+        return "date"
+
+    if boolean_count == non_empty_count:
+        return "boolean"
+
+    strongest = max(number_count, date_count, boolean_count)
+
+    if strongest >= max(2, int(non_empty_count * 0.8)):
+        return "mixed"
+
+    return "text"
+
+
 def contains_suspicious_characters(value):
     value = str(value)
-
-    if not value:
-        return False
 
     if "\ufffd" in value:
         return True
 
-    if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", value):
-        return True
-
-    return False
+    return bool(re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", value))
 
 
 def contains_non_ascii_characters(value):
-    value = str(value)
-
-    if not value:
-        return False
-
-    return bool(re.search(r"[^\x00-\x7F]", value))
+    return bool(re.search(r"[^\x00-\x7F]", str(value)))
 
 
 def is_suspicious_default_date(value):
-    normalized = str(value).strip()
-
-    default_dates = {
+    return str(value).strip() in {
         "1900-01-01",
         "01/01/1900",
         "1/1/1900",
@@ -204,16 +188,10 @@ def is_suspicious_default_date(value):
         "0000-00-00",
     }
 
-    return normalized in default_dates
-
 
 def is_very_old_date(value, cutoff_year=1926):
     parsed = parse_date(value)
-
-    if not parsed:
-        return False
-
-    return parsed.year < cutoff_year
+    return bool(parsed and parsed.year < cutoff_year)
 
 
 def inspect_suspicious_value(column, value):
@@ -222,15 +200,14 @@ def inspect_suspicious_value(column, value):
     if not value:
         return issues
 
-    if contains_suspicious_characters(value):
-        issues.append("suspicious_characters")
-
     column_lower = column.lower()
     value_lower = str(value).strip().lower()
 
+    if contains_suspicious_characters(value):
+        issues.append("suspicious_characters")
+
     if contains_non_ascii_characters(value) and any(
-        hint in column_lower
-        for hint in ["id", "code", "email", "date", "number"]
+        hint in column_lower for hint in ["id", "code", "email", "date", "number"]
     ):
         issues.append("unexpected_non_ascii_in_structured_field")
 
@@ -249,90 +226,43 @@ def inspect_suspicious_value(column, value):
     return issues
 
 
-def build_duplicate_groups(row_records, columns):
-    key_columns = build_duplicate_key_columns(columns)
-
-    grouped = defaultdict(list)
-
-    for record in row_records:
-        key_values = [
-            normalize_for_matching(record["values"].get(column, ""))
-            for column in key_columns
-        ]
-
-        if not any(key_values):
-            continue
-
-        grouped[tuple(key_values)].append(record)
-
-    duplicate_groups = []
-
-    for key_values, records in grouped.items():
-        if len(records) < 2:
-            continue
-
-        varying_id_columns = []
-
-        for column in columns:
-            if not looks_like_id_column(column):
-                continue
-
-            unique_values = {
-                normalize_for_matching(record["values"].get(column, ""))
-                for record in records
-                if normalize_for_matching(record["values"].get(column, ""))
-            }
-
-            if len(unique_values) > 1:
-                varying_id_columns.append(column)
-
-        confidence = "high" if len(key_columns) >= 3 else "medium"
-
-        reason = (
-            f"{len(records)} rows share the same values across "
-            f"{len(key_columns)} duplicate-check column(s)."
-        )
-
-        if varying_id_columns:
-            reason += (
-                " One or more ID-like fields differ, which may indicate separate records "
-                "describing the same real-world entity."
-            )
-
-        duplicate_groups.append({
-            "group_id": f"csv-{make_group_id(list(key_values))}",
-            "confidence": confidence,
-            "reason": reason,
-            "matching_columns": key_columns,
-            "varying_id_columns": varying_id_columns,
-            "rows": [
-                {
-                    "row_number": record["row_number"],
-                    "values": {
-                        column: record["values"].get(column, "")
-                        for column in columns
-                    },
-                }
-                for record in records[:DUPLICATE_GROUP_ROW_LIMIT]
-            ],
-            "row_numbers": [record["row_number"] for record in records],
-            "rows_total": len(records),
-            "hidden_rows_count": max(0, len(records) - DUPLICATE_GROUP_ROW_LIMIT),
-        })
-
-    duplicate_groups.sort(
-        key=lambda group: (group["rows_total"], group["confidence"] == "high"),
-        reverse=True,
-    )
-
-    return duplicate_groups[:DUPLICATE_GROUP_LIMIT]
+def empty_csv_result(csv_path, error):
+    return {
+        "type": "csv_scan",
+        "success": False,
+        "error": error,
+        "path": csv_path,
+        "filename": os.path.basename(csv_path) if csv_path else "",
+        "row_count": 0,
+        "column_count": 0,
+        "columns": [],
+        "missing_by_column": {},
+        "preview_rows": [],
+        "column_profiles": {},
+        "duplicate_row_count": 0,
+        "duplicate_groups_total": 0,
+        "duplicate_groups": [],
+        "hidden_duplicate_groups_count": 0,
+        "duplicate_row_numbers_to_exclude": [],
+        "empty_columns": [],
+        "near_empty_columns": [],
+        "suggestions": [],
+        "data_quality_insights": [],
+        "suspicious_value_summary": {
+            "total": 0,
+            "by_column": {},
+            "by_issue": {},
+            "examples": [],
+            "row_numbers": [],
+        },
+    }
 
 
 def build_data_quality_insights(
     row_count,
     missing_by_column,
-    duplicate_row_count,
-    duplicate_groups,
+    duplicate_signal_count,
+    duplicate_groups_total,
     empty_columns,
     near_empty_columns,
     column_profiles,
@@ -342,19 +272,8 @@ def build_data_quality_insights(
 
     total_missing = sum(missing_by_column.values())
 
-    grouped_duplicate_rows = sum(
-        max(0, group.get("rows_total", 0) - 1)
-        for group in duplicate_groups
-    )
-
-    duplicate_signal_count = max(duplicate_row_count, grouped_duplicate_rows)
-
     if duplicate_signal_count > 0:
-        severity = (
-            "high"
-            if duplicate_signal_count / max(row_count, 1) >= 0.05
-            else "medium"
-        )
+        severity = "high" if duplicate_signal_count / max(row_count, 1) >= 0.05 else "medium"
 
         insights.append({
             "id": "duplicate_records",
@@ -362,20 +281,16 @@ def build_data_quality_insights(
             "severity": severity,
             "title": "Potential duplicate records detected",
             "summary": (
-                f"{duplicate_signal_count} duplicate-like row(s) were detected. "
-                "Some records may differ by ID while sharing enough stable metadata to require review."
+                f"{duplicate_signal_count} duplicate-like row(s) were detected across "
+                f"{duplicate_groups_total} group(s). Some records may differ by ID while sharing stable metadata."
             ),
             "count": duplicate_signal_count,
             "recommended_action": "Review duplicate groups before using this dataset as a source of truth.",
         })
 
     if total_missing > 0:
-        affected_columns = [
-            column for column, count in missing_by_column.items() if count > 0
-        ]
-
+        affected_columns = [column for column, count in missing_by_column.items() if count > 0]
         missing_ratio = total_missing / max(row_count * max(len(missing_by_column), 1), 1)
-
         severity = "high" if missing_ratio >= 0.25 else "medium" if missing_ratio >= 0.05 else "low"
 
         insights.append({
@@ -385,7 +300,7 @@ def build_data_quality_insights(
             "title": "Missing values present",
             "summary": (
                 f"{total_missing} missing value(s) were found across "
-                f"{len(affected_columns)} column(s). Missing data may be harmless or critical depending on the field."
+                f"{len(affected_columns)} column(s)."
             ),
             "count": total_missing,
             "affected_columns": affected_columns,
@@ -398,10 +313,7 @@ def build_data_quality_insights(
             "category": "empty_structure",
             "severity": "medium",
             "title": "Fully empty columns detected",
-            "summary": (
-                f"{len(empty_columns)} column(s) contain no values. "
-                "Empty columns often indicate unused schema fields, failed exports, or placeholders."
-            ),
+            "summary": f"{len(empty_columns)} column(s) contain no values.",
             "count": len(empty_columns),
             "affected_columns": empty_columns,
             "recommended_action": "Consider excluding fully empty columns from cleaned exports after review.",
@@ -413,10 +325,7 @@ def build_data_quality_insights(
             "category": "empty_structure",
             "severity": "low",
             "title": "Near-empty columns detected",
-            "summary": (
-                f"{len(near_empty_columns)} column(s) are mostly empty. "
-                "These may still be meaningful if the field is optional or rarely used."
-            ),
+            "summary": f"{len(near_empty_columns)} column(s) are mostly empty.",
             "count": len(near_empty_columns),
             "affected_columns": near_empty_columns,
             "recommended_action": "Review near-empty columns before deciding whether they should be preserved.",
@@ -434,10 +343,7 @@ def build_data_quality_insights(
             "category": "type_quality",
             "severity": "medium",
             "title": "Mixed column types detected",
-            "summary": (
-                f"{len(mixed_columns)} column(s) contain mixed-looking values. "
-                "Mixed types can cause import errors, failed validation, or inconsistent filtering."
-            ),
+            "summary": f"{len(mixed_columns)} column(s) contain mixed-looking values.",
             "count": len(mixed_columns),
             "affected_columns": mixed_columns,
             "recommended_action": "Inspect these columns for formatting inconsistencies before export or migration.",
@@ -447,7 +353,6 @@ def build_data_quality_insights(
 
     if suspicious_total > 0:
         affected_columns = list(suspicious_value_summary.get("by_column", {}).keys())
-
         severity = "high" if suspicious_total >= 100 else "medium"
 
         insights.append({
@@ -457,8 +362,7 @@ def build_data_quality_insights(
             "title": "Suspicious values detected",
             "summary": (
                 f"{suspicious_total} suspicious cell(s) were found across "
-                f"{len(affected_columns)} column(s). These may include unsupported characters, placeholder dates, "
-                "very old dates, or values that do not match expected column patterns."
+                f"{len(affected_columns)} column(s)."
             ),
             "count": suspicious_total,
             "affected_columns": affected_columns,
@@ -468,93 +372,121 @@ def build_data_quality_insights(
     return insights
 
 
-def empty_csv_result(csv_path, error):
-    return {
-        "type": "csv_scan",
-        "success": False,
-        "error": error,
-        "path": csv_path,
-        "filename": os.path.basename(csv_path) if csv_path else "",
-        "row_count": 0,
-        "column_count": 0,
-        "columns": [],
-        "missing_by_column": {},
-        "preview_rows": [],
-        "column_profiles": {},
-        "duplicate_row_count": 0,
-        "duplicate_groups": [],
-        "empty_columns": [],
-        "near_empty_columns": [],
-        "suggestions": [],
-        "data_quality_insights": [],
-        "suspicious_value_summary": {
-            "total": 0,
-            "by_column": {},
-            "by_issue": {},
-            "examples": [],
-            "row_numbers": [],
-        },
-    }
-
-
 def scan_csv(csv_path):
     if not csv_path or not os.path.exists(csv_path):
-        return empty_csv_result(
-            csv_path,
-            f"CSV file does not exist: {csv_path}",
-        )
-
-    preview_rows = []
-    row_count = 0
-    row_signatures = Counter()
-    row_records = []
-
-    suspicious_by_column = Counter()
-    suspicious_by_issue = Counter()
-    suspicious_examples = []
-    suspicious_row_numbers = set()
+        return empty_csv_result(csv_path, f"CSV file does not exist: {csv_path}")
 
     try:
+        preview_rows = []
+        row_count = 0
+
+        duplicate_key_columns = []
+        duplicate_groups_by_key = {}
+        exact_row_signatures = Counter()
+
+        suspicious_by_column = Counter()
+        suspicious_by_issue = Counter()
+        suspicious_examples = []
+        suspicious_row_numbers = set()
+
         with open(csv_path, "r", encoding="utf-8-sig", newline="") as file:
             reader = csv.DictReader(file)
             columns = reader.fieldnames or []
+            duplicate_key_columns = build_duplicate_key_columns(columns)
 
-            column_values = {column: [] for column in columns}
             missing_by_column = {column: 0 for column in columns}
+
+            stats = {
+                column: {
+                    "non_empty": 0,
+                    "empty": 0,
+                    "number": 0,
+                    "date": 0,
+                    "boolean": 0,
+                    "unique_values": set(),
+                    "sample_values": [],
+                }
+                for column in columns
+            }
 
             for row in reader:
                 row_count += 1
+
+                if row_count % 10000 == 0:
+                    emit_progress(
+                        rows_scanned=row_count,
+                        current_stage="analyzing_rows",
+                    )
 
                 normalized_row = {
                     column: normalize_cell(row.get(column, ""))
                     for column in columns
                 }
 
-                row_records.append({
-                    "row_number": row_count,
-                    "values": normalized_row,
-                })
-
                 if len(preview_rows) < PREVIEW_ROW_LIMIT:
                     preview_rows.append(normalized_row)
 
-                row_signature = tuple(
-                    normalized_row.get(column, "") for column in columns
-                )
-                row_signatures[row_signature] += 1
+                exact_signature = tuple(normalized_row.get(column, "") for column in columns)
+                exact_row_signatures[exact_signature] += 1
+
+                key_values = [
+                    normalize_for_matching(normalized_row.get(column, ""))
+                    for column in duplicate_key_columns
+                ]
+
+                if any(key_values):
+                    key = tuple(key_values)
+
+                    if key not in duplicate_groups_by_key:
+                        duplicate_groups_by_key[key] = {
+                            "count": 0,
+                            "row_numbers": [],
+                            "rows": [],
+                            "varying_id_values": {},
+                        }
+
+                    group = duplicate_groups_by_key[key]
+                    group["count"] += 1
+                    group["row_numbers"].append(row_count)
+
+                    if len(group["rows"]) < DUPLICATE_GROUP_ROW_LIMIT:
+                        group["rows"].append({
+                            "row_number": row_count,
+                            "values": normalized_row,
+                        })
+
+                    for column in columns:
+                        if looks_like_id_column(column):
+                            group["varying_id_values"].setdefault(column, set()).add(
+                                normalize_for_matching(normalized_row.get(column, ""))
+                            )
 
                 for column in columns:
                     value = normalized_row.get(column, "")
-                    column_values[column].append(value)
+                    column_stat = stats[column]
 
                     if value == "":
                         missing_by_column[column] += 1
+                        column_stat["empty"] += 1
+                    else:
+                        column_stat["non_empty"] += 1
+                        column_stat["unique_values"].add(value)
+
+                        if len(column_stat["sample_values"]) < SAMPLE_VALUE_LIMIT:
+                            if value not in column_stat["sample_values"]:
+                                column_stat["sample_values"].append(value)
+
+                        if is_number(value):
+                            column_stat["number"] += 1
+                        if is_date_like(value):
+                            column_stat["date"] += 1
+                        if is_boolean(value):
+                            column_stat["boolean"] += 1
 
                     issues = inspect_suspicious_value(column, value)
 
                     if issues:
                         suspicious_by_column[column] += 1
-
                         suspicious_row_numbers.add(row_count)
 
                         for issue in set(issues):
@@ -568,23 +500,72 @@ def scan_csv(csv_path):
                                 "issues": issues,
                             })
 
-        duplicate_row_count = sum(
-            count - 1 for count in row_signatures.values() if count > 1
+        emit_progress(
+            rows_scanned=row_count,
+            current_stage="building_duplicate_groups",
         )
 
-        duplicate_groups = build_duplicate_groups(row_records, columns)
+        exact_duplicate_row_count = sum(
+            count - 1 for count in exact_row_signatures.values() if count > 1
+        )
+
+        duplicate_groups_all = []
+
+        for key_values, group in duplicate_groups_by_key.items():
+            if group["count"] < 2:
+                continue
+
+            varying_id_columns = [
+                column
+                for column, values in group["varying_id_values"].items()
+                if len({value for value in values if value}) > 1
+            ]
+
+            confidence = "high" if len(duplicate_key_columns) >= 3 else "medium"
+
+            reason = (
+                f"{group['count']} rows share the same values across "
+                f"{len(duplicate_key_columns)} duplicate-check column(s)."
+            )
+
+            if varying_id_columns:
+                reason += " One or more ID-like fields differ."
+
+            duplicate_groups_all.append({
+                "group_id": f"csv-{make_group_id(list(key_values))}",
+                "confidence": confidence,
+                "reason": reason,
+                "matching_columns": duplicate_key_columns,
+                "varying_id_columns": varying_id_columns,
+                "rows": group["rows"],
+                "row_numbers": group["row_numbers"],
+                "rows_total": group["count"],
+                "hidden_rows_count": max(0, group["count"] - len(group["rows"])),
+            })
+
+        duplicate_groups_all.sort(
+            key=lambda group: (group["rows_total"], group["confidence"] == "high"),
+            reverse=True,
+        )
+
+        duplicate_groups = duplicate_groups_all[:DUPLICATE_GROUP_LIMIT]
+        duplicate_groups_total = len(duplicate_groups_all)
+        hidden_duplicate_groups_count = max(0, duplicate_groups_total - len(duplicate_groups))
+
+        duplicate_row_numbers_to_exclude = []
+
+        for group in duplicate_groups_all:
+            row_numbers = group.get("row_numbers", [])
+            duplicate_row_numbers_to_exclude.extend(row_numbers[1:])
 
         column_profiles = {}
         empty_columns = []
         near_empty_columns = []
 
         for column in columns:
-            values = column_values[column]
-            non_empty_values = [value for value in values if value != ""]
-            unique_values = sorted(set(non_empty_values))
-
-            empty_count = missing_by_column[column]
-            non_empty_count = row_count - empty_count
+            stat = stats[column]
+            empty_count = stat["empty"]
+            non_empty_count = stat["non_empty"]
 
             if row_count > 0 and empty_count == row_count:
                 empty_columns.append(column)
@@ -593,11 +574,16 @@ def scan_csv(csv_path):
 
             column_profiles[column] = {
                 "name": column,
-                "inferred_type": infer_type(values),
+                "inferred_type": infer_type_from_counts(
+                    non_empty_count,
+                    stat["number"],
+                    stat["date"],
+                    stat["boolean"],
+                ),
                 "non_empty_count": non_empty_count,
                 "empty_count": empty_count,
-                "unique_count": len(set(non_empty_values)),
-                "sample_values": unique_values[:SAMPLE_VALUE_LIMIT],
+                "unique_count": len(stat["unique_values"]),
+                "sample_values": stat["sample_values"],
             }
 
         suspicious_value_summary = {
@@ -607,6 +593,8 @@ def scan_csv(csv_path):
             "examples": suspicious_examples,
             "row_numbers": sorted(suspicious_row_numbers),
         }
+
+        duplicate_signal_count = len(duplicate_row_numbers_to_exclude)
 
         suggestions = []
 
@@ -628,13 +616,13 @@ def scan_csv(csv_path):
                 "columns": near_empty_columns,
             })
 
-        if duplicate_groups or duplicate_row_count > 0:
+        if duplicate_groups_total > 0:
             suggestions.append({
                 "id": "review_duplicate_records",
                 "label": "Review duplicate records",
                 "severity": "medium",
-                "reason": f"{len(duplicate_groups)} duplicate-like group(s) detected.",
-                "count": len(duplicate_groups),
+                "reason": f"{duplicate_groups_total} duplicate-like group(s) detected.",
+                "count": duplicate_groups_total,
             })
 
         if suspicious_value_summary["total"] > 0:
@@ -649,12 +637,17 @@ def scan_csv(csv_path):
         data_quality_insights = build_data_quality_insights(
             row_count=row_count,
             missing_by_column=missing_by_column,
-            duplicate_row_count=duplicate_row_count,
-            duplicate_groups=duplicate_groups,
+            duplicate_signal_count=duplicate_signal_count,
+            duplicate_groups_total=duplicate_groups_total,
             empty_columns=empty_columns,
             near_empty_columns=near_empty_columns,
             column_profiles=column_profiles,
             suspicious_value_summary=suspicious_value_summary,
+        )
+
+        emit_progress(
+            rows_scanned=row_count,
+            current_stage="finalizing_results",
         )
 
         return {
@@ -669,8 +662,11 @@ def scan_csv(csv_path):
             "missing_by_column": missing_by_column,
             "preview_rows": preview_rows,
             "column_profiles": column_profiles,
-            "duplicate_row_count": duplicate_row_count,
+            "duplicate_row_count": exact_duplicate_row_count,
+            "duplicate_groups_total": duplicate_groups_total,
             "duplicate_groups": duplicate_groups,
+            "hidden_duplicate_groups_count": hidden_duplicate_groups_count,
+            "duplicate_row_numbers_to_exclude": duplicate_row_numbers_to_exclude,
             "empty_columns": empty_columns,
             "near_empty_columns": near_empty_columns,
             "suggestions": suggestions,

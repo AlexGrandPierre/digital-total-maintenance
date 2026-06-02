@@ -122,6 +122,7 @@ export type CsvScanResult = {
   data_quality_insights: CsvDataQualityInsight[];
   suspicious_value_summary: CsvSuspiciousValueSummary;
   error?: string;
+  duplicate_row_numbers_to_exclude?: number[];
 };
 
 export type CsvDataQualityInsight = {
@@ -196,6 +197,10 @@ export type ScanResult = {
 
   age_buckets: Record<string, number>;
   by_ext: Record<string, number>;
+
+  duplicate_groups_total: number;
+  hidden_duplicate_groups_count: number;
+  duplicate_row_numbers_to_exclude: number[];
 
   errors: Array<{
     name?: string;

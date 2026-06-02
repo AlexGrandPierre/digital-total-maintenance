@@ -557,18 +557,33 @@ function App() {
   } | null>(null);
 
   const [busyPath, setBusyPath] = useState<string | null>(null);
-  const [scanProgress, setScanProgress] = useState<{
-    status: 'starting' | 'scanning' | 'finalizing';
-    target: string;
-    files_scanned: number;
-    current_path: string;
-    elapsed_seconds: number;
-    review_total: number;
-    archive_total: number;
-    remove_total: number;
-    duplicates_total: number;
-    excluded_dirs_count?: number;
-  } | null>(null);
+  const [scanProgress, setScanProgress] = useState<
+    | {
+        type?: 'progress';
+        status: 'starting' | 'scanning' | 'finalizing';
+        target: string;
+        files_scanned: number;
+        current_path: string;
+        elapsed_seconds: number;
+        review_total: number;
+        archive_total: number;
+        remove_total: number;
+        duplicates_total: number;
+        excluded_dirs_count?: number;
+      }
+    | {
+        type: 'csv_progress';
+        status: 'scanning';
+        target: string;
+        rows_scanned: number;
+        elapsed_seconds: number;
+        current_stage:
+          | 'analyzing_rows'
+          | 'building_duplicate_groups'
+          | 'finalizing_results';
+      }
+    | null
+  >(null);
 
   const [isBulkActing, setIsBulkActing] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<{
@@ -676,7 +691,21 @@ function App() {
     });
 
     const unsubscribeProgress = window.electronAPI?.onScanProgress?.((data) => {
+      if (data.type === 'csv_progress') {
+        setScanProgress({
+          type: 'csv_progress',
+          status: data.status,
+          target: data.target,
+          rows_scanned: data.rows_scanned,
+          elapsed_seconds: data.elapsed_seconds,
+          current_stage: data.current_stage,
+        });
+      
+        return;
+      }
+      
       setScanProgress({
+        type: 'progress',
         status: data.status,
         target: data.target,
         files_scanned: data.files_scanned,
@@ -2075,6 +2104,7 @@ function App() {
         duplicate_groups: csvData.duplicate_groups ?? [],
         suspicious_examples: csvData.suspicious_value_summary?.examples ?? [],
         suspicious_row_numbers: csvData.suspicious_value_summary?.row_numbers ?? [],
+        duplicate_row_numbers_to_exclude: csvData.duplicate_row_numbers_to_exclude ?? [],
       
         remove_empty_columns: true,
         remove_empty_rows: true,
@@ -2845,89 +2875,154 @@ function App() {
 
           {isScanning && scanProgress ? (
             <section className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm">
-              <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium uppercase tracking-[0.18em] text-slate-400">
-                    Scan Activity
-                  </p>
-                  <h3 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
-                    {scanProgress.status === 'starting'
-                      ? 'Initializing scan'
-                      : scanProgress.status === 'finalizing'
-                      ? 'Finalizing results'
-                      : 'Exploring file landscape'}
-                  </h3>
-                  <p className="mt-2 text-sm leading-6 text-slate-500">
-                    DTM is currently inspecting the selected target and building bounded summaries for safe review.
-                  </p>
+              {scanProgress.type === 'csv_progress' ? (
+                <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium uppercase tracking-[0.18em] text-slate-400">
+                      CSV Scan Activity
+                    </p>
 
-                  <div className="mt-5 rounded-2xl bg-slate-50 px-4 py-4">
-                    <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">
-                      Current Path
+                    <h3 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
+                      {scanProgress.current_stage === 'finalizing_results'
+                        ? 'Finalizing dataset results'
+                        : scanProgress.current_stage === 'building_duplicate_groups'
+                        ? 'Building duplicate groups'
+                        : 'Analyzing dataset rows'}
+                    </h3>
+
+                    <p className="mt-2 text-sm leading-6 text-slate-500">
+                      DTM is processing the CSV in bounded mode so large datasets can be analyzed without overwhelming the interface.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 xl:w-[26rem]">
+                    <div className="rounded-2xl bg-sky-50 p-4">
+                      <div className="text-xs uppercase tracking-[0.18em] text-sky-500">
+                        Rows Scanned
+                      </div>
+                      <div className="mt-2 text-2xl font-semibold text-sky-900">
+                        {(scanProgress.rows_scanned ?? 0).toLocaleString()}
+                      </div>
                     </div>
-                    <div className="mt-2 break-all text-sm text-slate-700">
-                      {scanProgress.current_path}
+
+                    <div className="rounded-2xl bg-slate-50 p-4">
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">
+                        Elapsed
+                      </div>
+                      <div className="mt-2 text-2xl font-semibold text-slate-900">
+                        {scanProgress.elapsed_seconds}s
+                      </div>
                     </div>
                   </div>
                 </div>
+              ) : (
+                <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium uppercase tracking-[0.18em] text-slate-400">
+                      Scan Activity
+                    </p>
 
-                <div className="grid grid-cols-2 gap-4 xl:w-[26rem]">
-                  <div className="rounded-2xl bg-slate-50 p-4">
-                    <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Files Processed</div>
-                    <div className="mt-2 text-2xl font-semibold text-slate-900">
-                      {scanProgress.files_scanned.toLocaleString()}
+                    <h3 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
+                      {scanProgress.status === 'starting'
+                        ? 'Initializing scan'
+                        : scanProgress.status === 'finalizing'
+                        ? 'Finalizing results'
+                        : 'Exploring file landscape'}
+                    </h3>
+
+                    <p className="mt-2 text-sm leading-6 text-slate-500">
+                      DTM is currently inspecting the selected target and building bounded summaries for safe review.
+                    </p>
+
+                    <div className="mt-5 rounded-2xl bg-slate-50 px-4 py-4">
+                      <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">
+                        Current Path
+                      </div>
+                      <div className="mt-2 break-all text-sm text-slate-700">
+                        {scanProgress.current_path}
+                      </div>
                     </div>
                   </div>
 
-                  <div className="rounded-2xl bg-slate-50 p-4">
-                    <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Elapsed</div>
-                    <div className="mt-2 text-2xl font-semibold text-slate-900">
-                      {scanProgress.elapsed_seconds}s
+                  <div className="grid grid-cols-2 gap-4 xl:w-[26rem]">
+                    <div className="rounded-2xl bg-slate-50 p-4">
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">
+                        Files Processed
+                      </div>
+                      <div className="mt-2 text-2xl font-semibold text-slate-900">
+                        {scanProgress.files_scanned.toLocaleString()}
+                      </div>
                     </div>
-                  </div>
 
-                  <div className="rounded-2xl bg-amber-50 p-4">
-                    <div className="text-xs uppercase tracking-[0.18em] text-amber-500">Review</div>
-                    <div className="mt-2 text-2xl font-semibold text-amber-900">
-                      {scanProgress.review_total.toLocaleString()}
+                    <div className="rounded-2xl bg-slate-50 p-4">
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">
+                        Elapsed
+                      </div>
+                      <div className="mt-2 text-2xl font-semibold text-slate-900">
+                        {scanProgress.elapsed_seconds}s
+                      </div>
                     </div>
-                  </div>
 
-                  <div className="rounded-2xl bg-sky-50 p-4">
-                    <div className="text-xs uppercase tracking-[0.18em] text-sky-500">Archive</div>
-                    <div className="mt-2 text-2xl font-semibold text-sky-900">
-                      {scanProgress.archive_total.toLocaleString()}
+                    <div className="rounded-2xl bg-amber-50 p-4">
+                      <div className="text-xs uppercase tracking-[0.18em] text-amber-500">
+                        Review
+                      </div>
+                      <div className="mt-2 text-2xl font-semibold text-amber-900">
+                        {scanProgress.review_total.toLocaleString()}
+                      </div>
                     </div>
-                  </div>
 
-                  <div className="rounded-2xl bg-rose-50 p-4">
-                    <div className="text-xs uppercase tracking-[0.18em] text-rose-500">Remove</div>
-                    <div className="mt-2 text-2xl font-semibold text-rose-900">
-                      {scanProgress.remove_total.toLocaleString()}
+                    <div className="rounded-2xl bg-sky-50 p-4">
+                      <div className="text-xs uppercase tracking-[0.18em] text-sky-500">
+                        Archive
+                      </div>
+                      <div className="mt-2 text-2xl font-semibold text-sky-900">
+                        {scanProgress.archive_total.toLocaleString()}
+                      </div>
                     </div>
-                  </div>
 
-                  <div className="rounded-2xl bg-slate-50 p-4">
-                    <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Duplicates</div>
-                    <div className="mt-2 text-2xl font-semibold text-slate-900">
-                      {scanProgress.duplicates_total.toLocaleString()}
+                    <div className="rounded-2xl bg-rose-50 p-4">
+                      <div className="text-xs uppercase tracking-[0.18em] text-rose-500">
+                        Remove
+                      </div>
+                      <div className="mt-2 text-2xl font-semibold text-rose-900">
+                        {scanProgress.remove_total.toLocaleString()}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl bg-slate-50 p-4">
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">
+                        Duplicates
+                      </div>
+                      <div className="mt-2 text-2xl font-semibold text-slate-900">
+                        {scanProgress.duplicates_total.toLocaleString()}
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
+              )}
 
               <div className="mt-5 flex flex-wrap gap-3 text-xs text-slate-500">
                 <span className="rounded-full bg-slate-100 px-3 py-1">
                   Target: {scanProgress.target}
                 </span>
-                {typeof scanProgress.excluded_dirs_count === 'number' ? (
+
+                {scanProgress.type === 'csv_progress' ? (
                   <span className="rounded-full bg-slate-100 px-3 py-1">
-                    Excluded dirs: {scanProgress.excluded_dirs_count}
+                    Stage: {scanProgress.current_stage.replace(/_/g, ' ')}
                   </span>
-                ) : null}
-                <span className="rounded-full bg-slate-100 px-3 py-1">
-                  Status: {scanProgress.status}
-                </span>
+                ) : (
+                  <>
+                    {typeof scanProgress.excluded_dirs_count === 'number' ? (
+                      <span className="rounded-full bg-slate-100 px-3 py-1">
+                        Excluded dirs: {scanProgress.excluded_dirs_count}
+                      </span>
+                    ) : null}
+                    <span className="rounded-full bg-slate-100 px-3 py-1">
+                      Status: {scanProgress.status}
+                    </span>
+                  </>
+                )}
               </div>
             </section>
           ) : null}

@@ -54,7 +54,35 @@ type ScanProgress = {
 interface ElectronAPI {
   sendScanRequest?: (payload: ScanRequestPayload) => void;
   onScanFinished?: (callback: (data: { output?: string }) => void) => () => void;
-  onScanProgress?: (callback: (data: ScanProgress) => void) => () => void;
+  onScanProgress?: (
+    callback: (
+      data:
+        | {
+            type?: 'progress';
+            status: 'starting' | 'scanning' | 'finalizing';
+            target: string;
+            files_scanned: number;
+            current_path: string;
+            elapsed_seconds: number;
+            review_total: number;
+            archive_total: number;
+            remove_total: number;
+            duplicates_total: number;
+            excluded_dirs_count?: number;
+          }
+        | {
+            type: 'csv_progress';
+            status: 'scanning';
+            target: string;
+            rows_scanned: number;
+            elapsed_seconds: number;
+            current_stage:
+              | 'analyzing_rows'
+              | 'building_duplicate_groups'
+              | 'finalizing_results';
+          }
+    ) => void
+  ) => () => void;
 
   moveToReview?: (filePath: string, mode?: 'single' | 'bulk') => Promise<ActionResult>;
   moveToArchive?: (filePath: string, mode?: 'single' | 'bulk') => Promise<ActionResult>;
@@ -85,6 +113,7 @@ interface ElectronAPI {
     trim_whitespace?: boolean;
     exclude_duplicate_rows?: boolean;
     exclude_suspicious_rows?: boolean;
+    duplicate_row_numbers_to_exclude?: number[];
   }) => Promise<{
     success: boolean;
     action?: string;
