@@ -31,4 +31,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clearActionHistory: () => ipcRenderer.invoke('clear-action-history'),
   runCsvAction: (payload) => ipcRenderer.invoke('csv-action', payload),
   openCsvExportFolder: () => ipcRenderer.invoke('open-csv-export-folder'),
+
+  getDatasetDecisions: () => ipcRenderer.invoke('get-dataset-decisions'),
+
+  saveDatasetDecision: (payload) => ipcRenderer.invoke('save-dataset-decision', payload),
 });

@@ -83,6 +83,20 @@ type ActionHistoryEntry = {
   reverts_history_id?: string | null;
 };
 
+type DatasetDecision =
+  | 'approved_duplicate'
+  | 'legitimate_records'
+  | 'needs_review'
+  | 'ignored'
+  | 'pending';
+
+type DatasetDecisionRecord = {
+  group_id: string;
+  decision: DatasetDecision;
+  csv_path?: string;
+  updated_at: string;
+};
+
 const initialSessionState: SessionState = {
   resolvedPaths: [],
   reviewResolved: 0,
@@ -577,6 +591,7 @@ function App() {
         target: string;
         rows_scanned: number;
         elapsed_seconds: number;
+        rows_per_second?: number;
         current_stage:
           | 'analyzing_rows'
           | 'building_duplicate_groups'
@@ -608,7 +623,15 @@ function App() {
 
   const [duplicateVisibleCount, setDuplicateVisibleCount] = useState(8);
 
+  const [visibleCsvDuplicateCount, setVisibleCsvDuplicateCount] = useState(25);
+
   const [actionHistory, setActionHistory] = useState<ActionHistoryEntry[]>([]);
+
+  const [datasetDecisions, setDatasetDecisions] = useState<
+    Record<string, DatasetDecisionRecord>
+  >({});
+
+  const [busyDatasetDecisionId, setBusyDatasetDecisionId] = useState<string | null>(null);
 
   const [busyHistoryId, setBusyHistoryId] = useState<string | null>(null);
 
@@ -624,6 +647,19 @@ function App() {
   const [csvData, setCsvData] = useState<CsvScanResult | null>(null);
 
   const [lastCsvExportPath, setLastCsvExportPath] = useState<string | null>(null);
+
+  const [reviewQueueFilter, setReviewQueueFilter] = useState<
+    'all' | 'high' | 'medium' | 'low'
+  >('all');
+
+  const [decisionFilter, setDecisionFilter] = useState<
+    | 'all'
+    | 'pending'
+    | 'approved_duplicate'
+    | 'legitimate_records'
+    | 'needs_review'
+    | 'ignored'
+  >('pending');
 
   const [batchPreview, setBatchPreview] = useState<{
     filter: Exclude<QueueFilter, null>;
@@ -668,8 +704,10 @@ function App() {
       setArchiveVisibleCount(8);
       setRemoveVisibleCount(8);
       setDuplicateVisibleCount(8);
+      setVisibleCsvDuplicateCount(25);
 
       loadActionHistory();
+      loadDatasetDecisions();
 
       dispatchSession({ type: 'RESET_AFTER_RESCAN' });
 
@@ -679,6 +717,7 @@ function App() {
         if (parsed.type === 'csv_scan') {
           setCsvData(parsed);
           setScanData(null);
+          loadDatasetDecisions();
           return;
         }
       
@@ -914,6 +953,18 @@ function App() {
       );
     } catch {
       setActionHistory([]);
+    }
+  };
+
+  const loadDatasetDecisions = async () => {
+    try {
+      const result = await window.electronAPI?.getDatasetDecisions?.();
+  
+      if (result?.success && result.decisions) {
+        setDatasetDecisions(result.decisions);
+      }
+    } catch {
+      setDatasetDecisions({});
     }
   };
 
@@ -2105,6 +2156,7 @@ function App() {
         suspicious_examples: csvData.suspicious_value_summary?.examples ?? [],
         suspicious_row_numbers: csvData.suspicious_value_summary?.row_numbers ?? [],
         duplicate_row_numbers_to_exclude: csvData.duplicate_row_numbers_to_exclude ?? [],
+        dataset_decisions: datasetDecisions,
       
         remove_empty_columns: true,
         remove_empty_rows: true,
@@ -2134,6 +2186,51 @@ function App() {
     }
   };
 
+  const handleSaveDatasetDecision = async (
+    groupId: string,
+    decision: DatasetDecision
+  ) => {
+    if (!csvData?.success) return;
+  
+    setBusyDatasetDecisionId(groupId);
+    setActionStatus(null);
+  
+    try {
+      const result = await window.electronAPI?.saveDatasetDecision?.({
+        group_id: groupId,
+        decision,
+        csv_path: csvData.path,
+      });
+  
+      if (result?.success && result.decision) {
+        setDatasetDecisions((prev) => ({
+          ...prev,
+          [groupId]: result.decision as DatasetDecisionRecord,
+        }));
+  
+        setActionStatus({
+          tone: 'success',
+          message: result.message,
+        });
+      } else {
+        setActionStatus({
+          tone: 'error',
+          message: result?.message || 'Failed to save dataset decision.',
+        });
+      }
+    } catch (error) {
+      setActionStatus({
+        tone: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Unexpected dataset decision failure.',
+      });
+    } finally {
+      setBusyDatasetDecisionId(null);
+    }
+  };
+
   const handleOpenCsvExportFolder = async () => {
     try {
       const result = await window.electronAPI?.openCsvExportFolder?.();
@@ -2152,6 +2249,102 @@ function App() {
       });
     }
   };
+
+  const handleBulkDatasetDecision = async (decision: DatasetDecision) => {
+    if (!csvData?.success || filteredDuplicateGroups.length === 0) return;
+  
+    setActionStatus(null);
+  
+    let successCount = 0;
+    let failureCount = 0;
+  
+    for (const group of filteredDuplicateGroups) {
+      try {
+        const result = await window.electronAPI?.saveDatasetDecision?.({
+          group_id: group.group_id,
+          decision,
+          csv_path: csvData.path,
+        });
+  
+        if (result?.success && result.decision) {
+          successCount += 1;
+  
+          setDatasetDecisions((prev) => ({
+            ...prev,
+            [group.group_id]: result.decision as DatasetDecisionRecord,
+          }));
+        } else {
+          failureCount += 1;
+        }
+      } catch {
+        failureCount += 1;
+      }
+    }
+  
+    setActionStatus({
+      tone: failureCount === 0 ? 'success' : 'error',
+      message:
+        failureCount === 0
+          ? `Applied "${decision.replace(/_/g, ' ')}" to ${successCount} visible group${successCount === 1 ? '' : 's'}.`
+          : `Bulk decision finished with partial success: ${successCount} saved, ${failureCount} failed.`,
+    });
+  };
+
+  const filteredDuplicateGroups = useMemo(() => {
+    let groups =
+      reviewQueueFilter === 'high'
+        ? csvData?.duplicate_group_samples?.high_priority ?? []
+        : reviewQueueFilter === 'medium'
+        ? csvData?.duplicate_group_samples?.medium_priority ?? []
+        : reviewQueueFilter === 'low'
+        ? csvData?.duplicate_group_samples?.low_priority ?? []
+        : csvData?.duplicate_groups ?? [];
+  
+    if (decisionFilter !== 'all') {
+      groups = groups.filter((group) => {
+        const decision = datasetDecisions[group.group_id]?.decision || 'pending';
+        return decision === decisionFilter;
+      });
+    }
+  
+    return groups;
+  }, [csvData, reviewQueueFilter, decisionFilter, datasetDecisions]);
+
+  const datasetDecisionSummary = useMemo(() => {
+    const groups = csvData?.duplicate_groups ?? [];
+  
+    const counts = {
+      totalVisible: groups.length,
+      approved_duplicate: 0,
+      legitimate_records: 0,
+      needs_review: 0,
+      ignored: 0,
+      pending: 0,
+      reviewed: 0,
+    };
+  
+    for (const group of groups) {
+      const decision = datasetDecisions[group.group_id]?.decision || 'pending';
+  
+      if (decision === 'approved_duplicate') counts.approved_duplicate += 1;
+      else if (decision === 'legitimate_records') counts.legitimate_records += 1;
+      else if (decision === 'needs_review') counts.needs_review += 1;
+      else if (decision === 'ignored') counts.ignored += 1;
+      else counts.pending += 1;
+    }
+  
+    counts.reviewed =
+      counts.approved_duplicate +
+      counts.legitimate_records +
+      counts.needs_review +
+      counts.ignored;
+  
+    return counts;
+  }, [csvData, datasetDecisions]);
+
+  const visibleFilteredDuplicateGroups = useMemo(() => {
+    return filteredDuplicateGroups.slice(0, visibleCsvDuplicateCount);
+  }, [filteredDuplicateGroups, visibleCsvDuplicateCount]);
   
   const selectedBatchItems = useMemo(() => {
     if (!batchPreview) return [];
@@ -2895,6 +3088,15 @@ function App() {
                     </p>
                   </div>
 
+                  <div className="rounded-2xl bg-emerald-50 p-4">
+                    <div className="text-xs uppercase tracking-[0.18em] text-emerald-600">
+                      Processing Rate
+                    </div>
+                    <div className="mt-2 text-2xl font-semibold text-emerald-900">
+                      {(scanProgress.rows_per_second ?? 0).toLocaleString()}/s
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-2 gap-4 xl:w-[26rem]">
                     <div className="rounded-2xl bg-sky-50 p-4">
                       <div className="text-xs uppercase tracking-[0.18em] text-sky-500">
@@ -3196,6 +3398,259 @@ function App() {
                     </section>
                   </section>
 
+                  {csvData?.success && (csvData.duplicate_groups ?? []).length > 0 ? (
+                    <section className="rounded-[2rem] border border-emerald-100 bg-emerald-50/50 px-6 py-5 shadow-sm">
+                      <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
+                            Dataset Governance Progress
+                          </div>
+
+                          <h3 className="mt-1 text-xl font-semibold text-emerald-950">
+                            Duplicate review progress
+                          </h3>
+
+                          <p className="mt-2 text-sm leading-6 text-emerald-900/80">
+                            DTM tracks decisions for visible duplicate groups so large datasets can be reviewed over time.
+                          </p>
+                        </div>
+
+                        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-200">
+                          {datasetDecisionSummary.reviewed} reviewed
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+                        <div className="rounded-2xl bg-white px-4 py-3 ring-1 ring-emerald-100">
+                          <div className="text-xs font-medium text-emerald-700">Visible groups</div>
+                          <div className="mt-1 text-2xl font-semibold text-emerald-950">
+                            {datasetDecisionSummary.totalVisible}
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl bg-white px-4 py-3 ring-1 ring-emerald-100">
+                          <div className="text-xs font-medium text-emerald-700">Pending</div>
+                          <div className="mt-1 text-2xl font-semibold text-emerald-950">
+                            {datasetDecisionSummary.pending}
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl bg-white px-4 py-3 ring-1 ring-emerald-100">
+                          <div className="text-xs font-medium text-emerald-700">Approved</div>
+                          <div className="mt-1 text-2xl font-semibold text-emerald-950">
+                            {datasetDecisionSummary.approved_duplicate}
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl bg-white px-4 py-3 ring-1 ring-emerald-100">
+                          <div className="text-xs font-medium text-emerald-700">Legitimate</div>
+                          <div className="mt-1 text-2xl font-semibold text-emerald-950">
+                            {datasetDecisionSummary.legitimate_records}
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl bg-white px-4 py-3 ring-1 ring-emerald-100">
+                          <div className="text-xs font-medium text-emerald-700">Needs review</div>
+                          <div className="mt-1 text-2xl font-semibold text-emerald-950">
+                            {datasetDecisionSummary.needs_review}
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl bg-white px-4 py-3 ring-1 ring-emerald-100">
+                          <div className="text-xs font-medium text-emerald-700">Ignored</div>
+                          <div className="mt-1 text-2xl font-semibold text-emerald-950">
+                            {datasetDecisionSummary.ignored}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-5 flex flex-wrap gap-2">
+                        {[
+                          ['all', 'All'],
+                          ['pending', 'Pending'],
+                          ['approved_duplicate', 'Approved'],
+                          ['legitimate_records', 'Legitimate'],
+                          ['needs_review', 'Needs Review'],
+                          ['ignored', 'Ignored'],
+                        ].map(([value, label]) => (
+                          <button
+                            key={value}
+                            onClick={() =>
+                              setDecisionFilter(
+                                value as
+                                  | 'all'
+                                  | 'pending'
+                                  | 'approved_duplicate'
+                                  | 'legitimate_records'
+                                  | 'needs_review'
+                                  | 'ignored'
+                              )
+                            }
+                            className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                              decisionFilter === value
+                                ? 'bg-emerald-900 text-white'
+                                : 'bg-white text-emerald-800 ring-1 ring-emerald-200 hover:bg-emerald-50'
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          onClick={() => handleBulkDatasetDecision('approved_duplicate')}
+                          disabled={filteredDuplicateGroups.length === 0}
+                          className="rounded-full bg-emerald-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                        >
+                          Approve visible
+                        </button>
+
+                        <button
+                          onClick={() => handleBulkDatasetDecision('legitimate_records')}
+                          disabled={filteredDuplicateGroups.length === 0}
+                          className="rounded-full bg-sky-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                        >
+                          Mark visible legitimate
+                        </button>
+
+                        <button
+                          onClick={() => handleBulkDatasetDecision('needs_review')}
+                          disabled={filteredDuplicateGroups.length === 0}
+                          className="rounded-full bg-amber-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                        >
+                          Mark visible needs review
+                        </button>
+
+                        <button
+                          onClick={() => handleBulkDatasetDecision('ignored')}
+                          disabled={filteredDuplicateGroups.length === 0}
+                          className="rounded-full bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-600 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                        >
+                          Ignore visible
+                        </button>
+                      </div>
+
+                      <div className="mt-5">
+                        <div className="h-2 w-full overflow-hidden rounded-full bg-white ring-1 ring-emerald-100">
+                          <div
+                            className="h-full bg-emerald-700 transition-all duration-500"
+                            style={{
+                              width: `${
+                                datasetDecisionSummary.totalVisible === 0
+                                  ? 0
+                                  : Math.min(
+                                      100,
+                                      (datasetDecisionSummary.reviewed /
+                                        datasetDecisionSummary.totalVisible) *
+                                        100
+                                    )
+                              }%`,
+                            }}
+                          />
+                        </div>
+
+                        <div className="mt-2 text-xs text-emerald-800">
+                          {datasetDecisionSummary.reviewed} of {datasetDecisionSummary.totalVisible} visible duplicate groups reviewed.
+                        </div>
+                      </div>
+                    </section>
+                  ) : null}
+
+                  <section className="rounded-[2rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
+                    <div className="mb-5">
+                      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                        Review Queue
+                      </div>
+
+                      <h3 className="mt-1 text-xl font-semibold text-slate-900">
+                        Prioritized dataset findings
+                      </h3>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                      <button
+                        onClick={() => {
+                          setReviewQueueFilter('all');
+                          setVisibleCsvDuplicateCount(25);
+                        }}
+                        className={`rounded-2xl border px-4 py-4 text-left transition ${
+                          reviewQueueFilter === 'all'
+                            ? 'border-slate-400 bg-slate-100 ring-2 ring-slate-200'
+                            : 'border-slate-200 bg-slate-50 hover:bg-slate-100'
+                        }`}
+                      >
+                        <div className="text-xs font-medium text-slate-500">
+                          All Findings
+                        </div>
+
+                        <div className="mt-1 text-2xl font-semibold text-slate-900">
+                          {(csvData?.duplicate_groups_total ?? 0).toLocaleString()}
+                        </div>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setReviewQueueFilter('high');
+                          setVisibleCsvDuplicateCount(25);
+                        }}
+                        className={`rounded-2xl border px-4 py-4 text-left transition ${
+                          reviewQueueFilter === 'high'
+                            ? 'border-rose-400 bg-rose-100 ring-2 ring-rose-200'
+                            : 'border-rose-200 bg-rose-50 hover:bg-rose-100'
+                        }`}
+                      >
+                        <div className="text-xs font-medium text-rose-700">
+                          High Priority
+                        </div>
+
+                        <div className="mt-1 text-2xl font-semibold text-rose-900">
+                          {(csvData?.review_queue?.high_priority ?? []).length.toLocaleString()}
+                        </div>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setReviewQueueFilter('medium');
+                          setVisibleCsvDuplicateCount(25);
+                        }}
+                        className={`rounded-2xl border px-4 py-4 text-left transition ${
+                          reviewQueueFilter === 'medium'
+                            ? 'border-amber-400 bg-amber-100 ring-2 ring-amber-200'
+                            : 'border-amber-200 bg-amber-50 hover:bg-amber-100'
+                        }`}
+                      >
+                        <div className="text-xs font-medium text-amber-700">
+                          Medium Priority
+                        </div>
+
+                        <div className="mt-1 text-2xl font-semibold text-amber-900">
+                          {(csvData?.review_queue?.medium_priority ?? []).length.toLocaleString()}
+                        </div>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setReviewQueueFilter('low');
+                          setVisibleCsvDuplicateCount(25);
+                        }}
+                        className={`rounded-2xl border px-4 py-4 text-left transition ${
+                          reviewQueueFilter === 'low'
+                            ? 'border-sky-400 bg-sky-100 ring-2 ring-sky-200'
+                            : 'border-sky-200 bg-sky-50 hover:bg-sky-100'
+                        }`}
+                      >
+                        <div className="text-xs font-medium text-sky-700">
+                          Low Priority
+                        </div>
+
+                        <div className="mt-1 text-2xl font-semibold text-sky-900">
+                          {(csvData?.review_queue?.low_priority ?? []).length.toLocaleString()}
+                        </div>
+                      </button>
+                    </div>
+                  </section>
+
                   <section className="rounded-[2rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
                     <div className="mb-4 flex items-start justify-between gap-4">
                       <div>
@@ -3231,7 +3686,7 @@ function App() {
                             </div>
 
                             <h4 className="mt-1 text-base font-semibold text-amber-950">
-                              {(csvData.duplicate_groups ?? []).length} group
+                              {filteredDuplicateGroups.length} visible group
                               {(csvData.duplicate_groups ?? []).length === 1 ? '' : 's'} detected
                             </h4>
                           </div>
@@ -3251,7 +3706,7 @@ function App() {
                           </div>
                         ) : (
                           <div className="mt-4 max-h-[420px] space-y-3 overflow-y-auto pr-1">
-                            {(csvData.duplicate_groups ?? []).map((group, index) => (
+                            {visibleFilteredDuplicateGroups.map((group, index) => (
                               <div
                                 key={group.group_id}
                                 className="rounded-2xl border border-amber-200 bg-white px-4 py-4"
@@ -3267,14 +3722,66 @@ function App() {
                                     </div>
                                   </div>
 
-                                  <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200">
-                                    review
-                                  </span>
+                                  {(() => {
+                                    const savedDecision = datasetDecisions[group.group_id]?.decision || 'pending';
+
+                                    return (
+                                      <span
+                                        className={`rounded-full px-2.5 py-1 text-[11px] font-medium ring-1 ${
+                                          savedDecision === 'approved_duplicate'
+                                            ? 'bg-emerald-100 text-emerald-800 ring-emerald-200'
+                                            : savedDecision === 'legitimate_records'
+                                            ? 'bg-sky-100 text-sky-800 ring-sky-200'
+                                            : savedDecision === 'needs_review'
+                                            ? 'bg-amber-100 text-amber-800 ring-amber-200'
+                                            : savedDecision === 'ignored'
+                                            ? 'bg-slate-100 text-slate-600 ring-slate-200'
+                                            : 'bg-white text-slate-600 ring-slate-200'
+                                        }`}
+                                      >
+                                        {savedDecision.replace(/_/g, ' ')}
+                                      </span>
+                                    );
+                                  })()}
                                 </div>
 
                                 <p className="mt-3 text-sm leading-6 text-slate-600">
                                   {group.reason}
                                 </p>
+
+                                <div className="mt-4 flex flex-wrap gap-2">
+                                  <button
+                                    onClick={() => handleSaveDatasetDecision(group.group_id, 'approved_duplicate')}
+                                    disabled={busyDatasetDecisionId === group.group_id}
+                                    className="rounded-full bg-emerald-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                                  >
+                                    Approve duplicate
+                                  </button>
+
+                                  <button
+                                    onClick={() => handleSaveDatasetDecision(group.group_id, 'legitimate_records')}
+                                    disabled={busyDatasetDecisionId === group.group_id}
+                                    className="rounded-full bg-sky-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                                  >
+                                    Legitimate records
+                                  </button>
+
+                                  <button
+                                    onClick={() => handleSaveDatasetDecision(group.group_id, 'needs_review')}
+                                    disabled={busyDatasetDecisionId === group.group_id}
+                                    className="rounded-full bg-amber-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                                  >
+                                    Needs review
+                                  </button>
+
+                                  <button
+                                    onClick={() => handleSaveDatasetDecision(group.group_id, 'ignored')}
+                                    disabled={busyDatasetDecisionId === group.group_id}
+                                    className="rounded-full bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-600 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                                  >
+                                    Ignore
+                                  </button>
+                                </div>
 
                                 <div className="mt-3 flex flex-wrap gap-2">
                                   {group.matching_columns.map((column) => (
@@ -3326,6 +3833,28 @@ function App() {
                                 ) : null}
                               </div>
                             ))}
+
+                            {visibleCsvDuplicateCount < filteredDuplicateGroups.length ? (
+                              <button
+                                onClick={() =>
+                                  setVisibleCsvDuplicateCount((prev) =>
+                                    Math.min(prev + 25, filteredDuplicateGroups.length)
+                                  )
+                                }
+                                className="mt-4 rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
+                              >
+                                Load 25 more groups
+                              </button>
+                            ) : null}
+
+                            {visibleCsvDuplicateCount > 25 ? (
+                              <button
+                                onClick={() => setVisibleCsvDuplicateCount(25)}
+                                className="mt-4 ml-2 rounded-full bg-white px-4 py-2 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                              >
+                                Show fewer
+                              </button>
+                            ) : null}
                           </div>
                         )}
                       </div>

@@ -53,7 +53,7 @@ def write_rows(export_path, columns, rows, include_dtm_row_number=True):
             writer.writerow(output_row)
 
 
-def export_duplicate_groups(app_data_path, csv_path, duplicate_groups):
+def export_duplicate_groups(app_data_path, csv_path, duplicate_groups, dataset_decisions=None):
     export_dir = ensure_export_dir(app_data_path)
     columns, source_rows = read_csv_rows(csv_path)
 
@@ -62,6 +62,14 @@ def export_duplicate_groups(app_data_path, csv_path, duplicate_groups):
     }
 
     export_rows = []
+
+    dataset_decisions = dataset_decisions or {}
+
+    for group_index, group in enumerate(duplicate_groups, start=1):
+        decision = dataset_decisions.get(group.get("group_id"), {}).get("decision", "pending")
+
+        if decision in {"legitimate_records", "ignored"}:
+            continue
 
     for group_index, group in enumerate(duplicate_groups, start=1):
         group_id = group.get("group_id", f"group_{group_index}")
@@ -187,6 +195,7 @@ def export_clean_copy(
     duplicate_row_numbers_to_exclude=None,
     suspicious_examples=None,
     suspicious_row_numbers=None,
+    dataset_decisions=None,
     remove_empty_columns=True,
     remove_empty_rows=True,
     trim_whitespace=True,
@@ -198,9 +207,29 @@ def export_clean_copy(
 
     duplicate_row_numbers = set()
 
-    for row_number in duplicate_row_numbers_to_exclude or []:
-        if isinstance(row_number, int):
+    dataset_decisions = dataset_decisions or {}
+    duplicate_row_numbers = set()
+
+    for group in duplicate_groups or []:
+        group_id = group.get("group_id")
+        decision = dataset_decisions.get(group_id, {}).get("decision", "pending")
+
+        if decision in {"legitimate_records", "ignored"}:
+            continue
+
+        row_numbers = [
+            row_number
+            for row_number in group.get("row_numbers", [])
+            if isinstance(row_number, int)
+        ]
+
+        for row_number in row_numbers[1:]:
             duplicate_row_numbers.add(row_number)
+
+    if not duplicate_row_numbers:
+        for row_number in duplicate_row_numbers_to_exclude or []:
+            if isinstance(row_number, int):
+                duplicate_row_numbers.add(row_number)
 
     if not duplicate_row_numbers:
         for group in duplicate_groups or []:
@@ -318,6 +347,7 @@ def run_action(app_data_path, payload):
             app_data_path=app_data_path,
             csv_path=csv_path,
             duplicate_groups=payload.get("duplicate_groups", []),
+            dataset_decisions=payload.get("dataset_decisions", {}),
         )
 
     if action == "export_suspicious_rows":
@@ -336,6 +366,7 @@ def run_action(app_data_path, payload):
             duplicate_row_numbers_to_exclude=payload.get("duplicate_row_numbers_to_exclude", []),
             suspicious_examples=payload.get("suspicious_examples", []),
             suspicious_row_numbers=payload.get("suspicious_row_numbers", []),
+            dataset_decisions=payload.get("dataset_decisions", {}),
             remove_empty_columns=payload.get("remove_empty_columns", True),
             remove_empty_rows=payload.get("remove_empty_rows", True),
             trim_whitespace=payload.get("trim_whitespace", True),

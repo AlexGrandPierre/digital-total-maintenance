@@ -123,6 +123,36 @@ export type CsvScanResult = {
   suspicious_value_summary: CsvSuspiciousValueSummary;
   error?: string;
   duplicate_row_numbers_to_exclude?: number[];
+  duplicate_groups_total: number;
+
+  review_queue?: {
+    high_priority: {
+      group_id: string;
+      confidence: number;
+      rows_total: number;
+      reason: string;
+    }[];
+  
+    medium_priority: {
+      group_id: string;
+      confidence: number;
+      rows_total: number;
+      reason: string;
+    }[];
+  
+    low_priority: {
+      group_id: string;
+      confidence: number;
+      rows_total: number;
+      reason: string;
+    }[];
+  };
+
+  duplicate_group_samples?: {
+    high_priority: CsvDuplicateGroup[];
+    medium_priority: CsvDuplicateGroup[];
+    low_priority: CsvDuplicateGroup[];
+  };
 };
 
 export type CsvDataQualityInsight = {
@@ -198,7 +228,6 @@ export type ScanResult = {
   age_buckets: Record<string, number>;
   by_ext: Record<string, number>;
 
-  duplicate_groups_total: number;
   hidden_duplicate_groups_count: number;
   duplicate_row_numbers_to_exclude: number[];
 

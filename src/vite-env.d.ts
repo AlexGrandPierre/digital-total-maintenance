@@ -76,6 +76,7 @@ interface ElectronAPI {
             target: string;
             rows_scanned: number;
             elapsed_seconds: number;
+            rows_per_second?: number;
             current_stage:
               | 'analyzing_rows'
               | 'building_duplicate_groups'
@@ -114,6 +115,7 @@ interface ElectronAPI {
     exclude_duplicate_rows?: boolean;
     exclude_suspicious_rows?: boolean;
     duplicate_row_numbers_to_exclude?: number[];
+    dataset_decisions?: Record<string, unknown>;
   }) => Promise<{
     success: boolean;
     action?: string;
@@ -126,6 +128,50 @@ interface ElectronAPI {
     success: boolean;
     message: string;
     path?: string;
+  }>;
+
+  getDatasetDecisions?: () => Promise<{
+    success: boolean;
+    decisions: Record<
+      string,
+      {
+        group_id: string;
+        decision:
+          | 'approved_duplicate'
+          | 'legitimate_records'
+          | 'needs_review'
+          | 'ignored'
+          | 'pending';
+        csv_path?: string;
+        updated_at: string;
+      }
+    >;
+    message?: string;
+  }>;
+  
+  saveDatasetDecision?: (payload: {
+    group_id: string;
+    decision:
+      | 'approved_duplicate'
+      | 'legitimate_records'
+      | 'needs_review'
+      | 'ignored'
+      | 'pending';
+    csv_path: string;
+  }) => Promise<{
+    success: boolean;
+    message: string;
+    decision?: {
+      group_id: string;
+      decision:
+        | 'approved_duplicate'
+        | 'legitimate_records'
+        | 'needs_review'
+        | 'ignored'
+        | 'pending';
+      csv_path?: string;
+      updated_at: string;
+    };
   }>;
 }
 

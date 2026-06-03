@@ -12,8 +12,9 @@ from datetime import datetime
 PREVIEW_ROW_LIMIT = 10
 SAMPLE_VALUE_LIMIT = 5
 SUSPICIOUS_EXAMPLE_LIMIT = 25
-DUPLICATE_GROUP_LIMIT = 25
+DUPLICATE_GROUP_LIMIT = 200
 DUPLICATE_GROUP_ROW_LIMIT = 8
+DUPLICATE_GROUP_SAMPLE_LIMIT_PER_BUCKET = 75
 
 IDENTITY_COLUMN_HINTS = [
     "first name",
@@ -38,12 +39,14 @@ SCAN_STARTED_AT = time.time()
 
 def emit_progress(rows_scanned, current_stage):
     elapsed_seconds = round(time.time() - SCAN_STARTED_AT, 1)
+    rows_per_second = round(rows_scanned / elapsed_seconds) if elapsed_seconds > 0 else 0
 
     print(json.dumps({
         "type": "csv_progress",
         "status": "scanning",
         "target": "CSV Dataset",
         "rows_scanned": rows_scanned,
+        "rows_per_second": rows_per_second,
         "elapsed_seconds": elapsed_seconds,
         "current_stage": current_stage,
     }), flush=True)
@@ -254,6 +257,11 @@ def empty_csv_result(csv_path, error):
             "by_issue": {},
             "examples": [],
             "row_numbers": [],
+        },
+        "duplicate_group_samples": {
+            "high_priority": [],
+            "medium_priority": [],
+            "low_priority": [],
         },
     }
 
@@ -554,6 +562,38 @@ def scan_csv(csv_path):
 
         duplicate_row_numbers_to_exclude = []
 
+        review_queue = {
+            "high_priority": [],
+            "medium_priority": [],
+            "low_priority": [],
+        }
+
+        duplicate_group_samples = {
+            "high_priority": [],
+            "medium_priority": [],
+            "low_priority": [],
+        }
+
+        for group in duplicate_groups_all:
+            queue_item = {
+                "group_id": group["group_id"],
+                "confidence": group["confidence"],
+                "rows_total": group["rows_total"],
+                "reason": group["reason"],
+            }
+
+            if group["confidence"] == "high" and group["rows_total"] >= 3:
+                bucket = "high_priority"
+            elif group["confidence"] == "high" or group["rows_total"] >= 3:
+                bucket = "medium_priority"
+            else:
+                bucket = "low_priority"
+
+            review_queue[bucket].append(queue_item)
+
+            if len(duplicate_group_samples[bucket]) < DUPLICATE_GROUP_SAMPLE_LIMIT_PER_BUCKET:
+                duplicate_group_samples[bucket].append(group)
+
         for group in duplicate_groups_all:
             row_numbers = group.get("row_numbers", [])
             duplicate_row_numbers_to_exclude.extend(row_numbers[1:])
@@ -666,6 +706,8 @@ def scan_csv(csv_path):
             "duplicate_groups_total": duplicate_groups_total,
             "duplicate_groups": duplicate_groups,
             "hidden_duplicate_groups_count": hidden_duplicate_groups_count,
+            "review_queue": review_queue,
+            "duplicate_group_samples": duplicate_group_samples,
             "duplicate_row_numbers_to_exclude": duplicate_row_numbers_to_exclude,
             "empty_columns": empty_columns,
             "near_empty_columns": near_empty_columns,

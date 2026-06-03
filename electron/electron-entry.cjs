@@ -588,6 +588,46 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('get-dataset-decisions', async () => {
+    const decisionPath = path.join(__dirname, '..', 'modules', 'dataset_decision.py');
+  
+    const result = await runPythonScript(decisionPath, [
+      '--app-data',
+      getAppDataPath(),
+      'read',
+    ]);
+  
+    try {
+      return JSON.parse(result.output || '{}');
+    } catch {
+      return {
+        success: false,
+        decisions: {},
+        message: result.errorOutput || result.output || 'Failed to read dataset decisions.',
+      };
+    }
+  });
+  
+  ipcMain.handle('save-dataset-decision', async (_event, payload = {}) => {
+    const decisionPath = path.join(__dirname, '..', 'modules', 'dataset_decision.py');
+  
+    const result = await runPythonScript(decisionPath, [
+      '--app-data',
+      getAppDataPath(),
+      'save',
+      JSON.stringify(payload),
+    ]);
+  
+    try {
+      return JSON.parse(result.output || '{}');
+    } catch {
+      return {
+        success: false,
+        message: result.errorOutput || result.output || 'Failed to save dataset decision.',
+      };
+    }
+  });
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
