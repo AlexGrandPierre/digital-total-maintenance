@@ -35,4 +35,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getDatasetDecisions: () => ipcRenderer.invoke('get-dataset-decisions'),
 
   saveDatasetDecision: (payload) => ipcRenderer.invoke('save-dataset-decision', payload),
+
+  loadCsvReviewSession: (payload) =>
+    ipcRenderer.invoke('load-csv-review-session', payload),
+  
+  saveCsvReviewSession: (payload) =>
+    ipcRenderer.invoke('save-csv-review-session', payload),
 });

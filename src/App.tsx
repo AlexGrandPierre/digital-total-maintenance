@@ -97,6 +97,22 @@ type DatasetDecisionRecord = {
   updated_at: string;
 };
 
+type SuspiciousDecision =
+  | 'pending'
+  | 'valid_data'
+  | 'corrupted'
+  | 'needs_review'
+  | 'ignored';
+
+type SuspiciousDecisionRecord = {
+  issue_id: string;
+  decision: SuspiciousDecision;
+  csv_path?: string;
+  row_number: number;
+  column: string;
+  updated_at: string;
+};
+
 const initialSessionState: SessionState = {
   resolvedPaths: [],
   reviewResolved: 0,
@@ -571,34 +587,7 @@ function App() {
   } | null>(null);
 
   const [busyPath, setBusyPath] = useState<string | null>(null);
-  const [scanProgress, setScanProgress] = useState<
-    | {
-        type?: 'progress';
-        status: 'starting' | 'scanning' | 'finalizing';
-        target: string;
-        files_scanned: number;
-        current_path: string;
-        elapsed_seconds: number;
-        review_total: number;
-        archive_total: number;
-        remove_total: number;
-        duplicates_total: number;
-        excluded_dirs_count?: number;
-      }
-    | {
-        type: 'csv_progress';
-        status: 'scanning';
-        target: string;
-        rows_scanned: number;
-        elapsed_seconds: number;
-        rows_per_second?: number;
-        current_stage:
-          | 'analyzing_rows'
-          | 'building_duplicate_groups'
-          | 'finalizing_results';
-      }
-    | null
-  >(null);
+  const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
 
   const [isBulkActing, setIsBulkActing] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<{
@@ -632,6 +621,12 @@ function App() {
   >({});
 
   const [busyDatasetDecisionId, setBusyDatasetDecisionId] = useState<string | null>(null);
+
+  const [suspiciousDecisions, setSuspiciousDecisions] = useState<
+    Record<string, SuspiciousDecisionRecord>
+  >({});
+
+  const [busySuspiciousDecisionId, setBusySuspiciousDecisionId] = useState<string | null>(null);
 
   const [busyHistoryId, setBusyHistoryId] = useState<string | null>(null);
 
@@ -674,6 +669,12 @@ function App() {
   );
 
   const [selectedBatchPaths, setSelectedBatchPaths] = useState<Set<string>>(new Set());
+
+  const [csvReviewSession, setCsvReviewSession] = useState<{
+    csv_path: string;
+    session_id: string;
+    last_updated: string | null;
+  } | null>(null);
 
   const openBatchPreview = (preview: Exclude<BatchPreview, null>) => {
     setBatchPreview(preview);
@@ -718,6 +719,7 @@ function App() {
           setCsvData(parsed);
           setScanData(null);
           loadDatasetDecisions();
+          loadCsvReviewSession(parsed.path);
           return;
         }
       
@@ -730,14 +732,18 @@ function App() {
     });
 
     const unsubscribeProgress = window.electronAPI?.onScanProgress?.((data) => {
-      if (data.type === 'csv_progress') {
+      if ('rows_scanned' in data) {
         setScanProgress({
           type: 'csv_progress',
           status: data.status,
           target: data.target,
           rows_scanned: data.rows_scanned,
+          rows_per_second: data.rows_per_second,
           elapsed_seconds: data.elapsed_seconds,
           current_stage: data.current_stage,
+          duplicate_candidates: data.duplicate_candidates,
+          suspicious_values: data.suspicious_values,
+          missing_values: data.missing_values,
         });
       
         return;
@@ -2231,6 +2237,103 @@ function App() {
     }
   };
 
+  const getSuspiciousIssueId = (example: {
+    row_number: number;
+    column: string;
+  }) => {
+    return `suspicious-${example.row_number}-${example.column}`;
+  };
+
+  useEffect(() => {
+    if (!csvData?.success || !csvData.path) return;
+  
+    const timeoutId = window.setTimeout(() => {
+      window.electronAPI?.saveCsvReviewSession?.({
+        csv_path: csvData.path,
+        duplicate_decisions: datasetDecisions,
+        suspicious_decisions: suspiciousDecisions,
+      });
+    }, 500);
+  
+    return () => window.clearTimeout(timeoutId);
+  }, [csvData?.path, csvData?.success, datasetDecisions, suspiciousDecisions]);
+
+  const loadCsvReviewSession = async (csvPath: string) => {
+    try {
+      const result = await window.electronAPI?.loadCsvReviewSession?.({
+        csv_path: csvPath,
+      });
+  
+      if (result?.success && result.session) {
+        setCsvReviewSession({
+          csv_path: result.session.csv_path,
+          session_id: result.session.session_id,
+          last_updated: result.session.last_updated,
+        });
+  
+        if (result.session.duplicate_decisions) {
+          setDatasetDecisions(
+            result.session.duplicate_decisions as Record<string, DatasetDecisionRecord>
+          );
+        }
+
+        if (result.session.suspicious_decisions) {
+          setSuspiciousDecisions(
+            result.session.suspicious_decisions as Record<string, SuspiciousDecisionRecord>
+          );
+        }
+      }
+    } catch {
+      setCsvReviewSession(null);
+    }
+  };
+
+  const handleSaveSuspiciousDecision = async (
+    example: {
+      row_number: number;
+      column: string;
+    },
+    decision: SuspiciousDecision
+  ) => {
+    if (!csvData?.success) return;
+  
+    const issueId = getSuspiciousIssueId(example);
+  
+    setBusySuspiciousDecisionId(issueId);
+    setActionStatus(null);
+  
+    const record: SuspiciousDecisionRecord = {
+      issue_id: issueId,
+      decision,
+      csv_path: csvData.path,
+      row_number: example.row_number,
+      column: example.column,
+      updated_at: new Date().toISOString(),
+    };
+  
+    try {
+      setSuspiciousDecisions((prev) => ({
+        ...prev,
+        [issueId]: record,
+      }));
+  
+      setActionStatus({
+        tone: 'success',
+        message: `Saved suspicious value decision: ${decision.replace(/_/g, ' ')}`,
+      });
+    } catch (error) {
+      setActionStatus({
+        tone: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Unexpected suspicious value decision failure.',
+      });
+    } finally {
+      setBusySuspiciousDecisionId(null);
+    }
+  };
+
   const handleOpenCsvExportFolder = async () => {
     try {
       const result = await window.electronAPI?.openCsvExportFolder?.();
@@ -3088,22 +3191,13 @@ function App() {
                     </p>
                   </div>
 
-                  <div className="rounded-2xl bg-emerald-50 p-4">
-                    <div className="text-xs uppercase tracking-[0.18em] text-emerald-600">
-                      Processing Rate
-                    </div>
-                    <div className="mt-2 text-2xl font-semibold text-emerald-900">
-                      {(scanProgress.rows_per_second ?? 0).toLocaleString()}/s
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4 xl:w-[26rem]">
-                    <div className="rounded-2xl bg-sky-50 p-4">
-                      <div className="text-xs uppercase tracking-[0.18em] text-sky-500">
+                  <div className="grid grid-cols-2 gap-4 xl:w-[32rem]">
+                    <div className="rounded-2xl bg-slate-50 p-4">
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">
                         Rows Scanned
                       </div>
-                      <div className="mt-2 text-2xl font-semibold text-sky-900">
-                        {(scanProgress.rows_scanned ?? 0).toLocaleString()}
+                      <div className="mt-2 text-2xl font-semibold text-slate-900">
+                        {scanProgress.rows_scanned.toLocaleString()}
                       </div>
                     </div>
 
@@ -3113,6 +3207,42 @@ function App() {
                       </div>
                       <div className="mt-2 text-2xl font-semibold text-slate-900">
                         {scanProgress.elapsed_seconds}s
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl bg-emerald-50 p-4">
+                      <div className="text-xs uppercase tracking-[0.18em] text-emerald-700">
+                        Processing Rate
+                      </div>
+                      <div className="mt-2 text-2xl font-semibold text-emerald-950">
+                        {(scanProgress.rows_per_second ?? 0).toLocaleString()}/s
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl bg-amber-50 p-4">
+                      <div className="text-xs uppercase tracking-[0.18em] text-amber-700">
+                        Duplicate Groups
+                      </div>
+                      <div className="mt-2 text-2xl font-semibold text-amber-950">
+                        {(scanProgress.duplicate_candidates ?? 0).toLocaleString()}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl bg-rose-50 p-4">
+                      <div className="text-xs uppercase tracking-[0.18em] text-rose-700">
+                        Suspicious Values
+                      </div>
+                      <div className="mt-2 text-2xl font-semibold text-rose-950">
+                        {(scanProgress.suspicious_values ?? 0).toLocaleString()}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl bg-sky-50 p-4">
+                      <div className="text-xs uppercase tracking-[0.18em] text-sky-700">
+                        Missing Values
+                      </div>
+                      <div className="mt-2 text-2xl font-semibold text-sky-950">
+                        {(scanProgress.missing_values ?? 0).toLocaleString()}
                       </div>
                     </div>
                   </div>
@@ -3397,6 +3527,55 @@ function App() {
                       )}
                     </section>
                   </section>
+
+                  {csvData?.success ? (
+                    <section className="rounded-[2rem] border border-sky-100 bg-sky-50/50 px-6 py-5 shadow-sm">
+                      <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-700">
+                            Dataset Review Session
+                          </div>
+
+                          <h3 className="mt-1 text-xl font-semibold text-slate-900">
+                            Review state is being saved locally
+                          </h3>
+
+                          <p className="mt-2 text-sm leading-6 text-slate-600">
+                            DTM preserves duplicate-group decisions for this CSV so review work can continue across sessions.
+                          </p>
+                        </div>
+
+                        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-sky-800 ring-1 ring-sky-200">
+                          {csvReviewSession?.last_updated ? 'Session restored' : 'New session'}
+                        </span>
+                      </div>
+
+                      <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-3">
+                        <div className="rounded-2xl bg-white px-4 py-3 ring-1 ring-sky-100">
+                          <div className="text-xs font-medium text-sky-700">Dataset</div>
+                          <div className="mt-1 truncate text-sm font-semibold text-slate-900">
+                            {csvData.filename}
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl bg-white px-4 py-3 ring-1 ring-sky-100">
+                          <div className="text-xs font-medium text-sky-700">Saved decisions</div>
+                          <div className="mt-1 text-2xl font-semibold text-slate-900">
+                            {Object.keys(datasetDecisions).length}
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl bg-white px-4 py-3 ring-1 ring-sky-100">
+                          <div className="text-xs font-medium text-sky-700">Last saved</div>
+                          <div className="mt-1 text-sm font-semibold text-slate-900">
+                            {csvReviewSession?.last_updated
+                              ? new Date(csvReviewSession.last_updated).toLocaleString()
+                              : 'Not saved yet'}
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  ) : null}
 
                   {csvData?.success && (csvData.duplicate_groups ?? []).length > 0 ? (
                     <section className="rounded-[2rem] border border-emerald-100 bg-emerald-50/50 px-6 py-5 shadow-sm">
@@ -3904,6 +4083,63 @@ function App() {
                                   <span className="rounded-full bg-rose-100 px-2.5 py-1 text-[11px] font-medium text-rose-800 ring-1 ring-rose-200">
                                     review
                                   </span>
+                                </div>
+
+                                {(() => {
+                                  const issueId = getSuspiciousIssueId(example);
+                                  const savedDecision = suspiciousDecisions[issueId]?.decision || 'pending';
+
+                                  return (
+                                    <span
+                                      className={`rounded-full px-2.5 py-1 text-[11px] font-medium ring-1 ${
+                                        savedDecision === 'corrupted'
+                                          ? 'bg-rose-100 text-rose-800 ring-rose-200'
+                                          : savedDecision === 'valid_data'
+                                          ? 'bg-emerald-100 text-emerald-800 ring-emerald-200'
+                                          : savedDecision === 'needs_review'
+                                          ? 'bg-amber-100 text-amber-800 ring-amber-200'
+                                          : savedDecision === 'ignored'
+                                          ? 'bg-slate-100 text-slate-600 ring-slate-200'
+                                          : 'bg-white text-slate-600 ring-slate-200'
+                                      }`}
+                                    >
+                                      {savedDecision.replace(/_/g, ' ')}
+                                    </span>
+                                  );
+                                })()}
+
+                                <div className="mt-4 flex flex-wrap gap-2">
+                                  <button
+                                    onClick={() => handleSaveSuspiciousDecision(example, 'valid_data')}
+                                    disabled={busySuspiciousDecisionId === getSuspiciousIssueId(example)}
+                                    className="rounded-full bg-emerald-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                                  >
+                                    Valid data
+                                  </button>
+
+                                  <button
+                                    onClick={() => handleSaveSuspiciousDecision(example, 'corrupted')}
+                                    disabled={busySuspiciousDecisionId === getSuspiciousIssueId(example)}
+                                    className="rounded-full bg-rose-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-rose-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                                  >
+                                    Corrupted
+                                  </button>
+
+                                  <button
+                                    onClick={() => handleSaveSuspiciousDecision(example, 'needs_review')}
+                                    disabled={busySuspiciousDecisionId === getSuspiciousIssueId(example)}
+                                    className="rounded-full bg-amber-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                                  >
+                                    Needs review
+                                  </button>
+
+                                  <button
+                                    onClick={() => handleSaveSuspiciousDecision(example, 'ignored')}
+                                    disabled={busySuspiciousDecisionId === getSuspiciousIssueId(example)}
+                                    className="rounded-full bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-600 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                                  >
+                                    Ignore
+                                  </button>
                                 </div>
 
                                 <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-700 break-all">

@@ -37,7 +37,7 @@ type BrowseResult = {
   path: string;
 };
 
-type ScanProgress = {
+type FileScanProgress = {
   type: 'progress';
   status: 'starting' | 'scanning' | 'finalizing';
   target: string;
@@ -50,6 +50,24 @@ type ScanProgress = {
   duplicates_total: number;
   excluded_dirs_count?: number;
 };
+
+type CsvScanProgress = {
+  type: 'csv_progress';
+  status: 'scanning';
+  target: string;
+  rows_scanned: number;
+  elapsed_seconds: number;
+  rows_per_second?: number;
+  duplicate_candidates?: number;
+  suspicious_values?: number;
+  missing_values?: number;
+  current_stage:
+    | 'analyzing_rows'
+    | 'building_duplicate_groups'
+    | 'finalizing_results';
+};
+
+type ScanProgress = FileScanProgress | CsvScanProgress;
 
 interface ElectronAPI {
   sendScanRequest?: (payload: ScanRequestPayload) => void;
@@ -77,6 +95,9 @@ interface ElectronAPI {
             rows_scanned: number;
             elapsed_seconds: number;
             rows_per_second?: number;
+            duplicate_candidates?: number;
+            suspicious_values?: number;
+            missing_values?: number;
             current_stage:
               | 'analyzing_rows'
               | 'building_duplicate_groups'
@@ -171,6 +192,37 @@ interface ElectronAPI {
         | 'pending';
       csv_path?: string;
       updated_at: string;
+    };
+  }>;
+
+  loadCsvReviewSession?: (payload: {
+    csv_path: string;
+  }) => Promise<{
+    success: boolean;
+    message?: string;
+    session?: {
+      csv_path: string;
+      session_id: string;
+      last_updated: string | null;
+      duplicate_decisions: Record<string, unknown>;
+      suspicious_decisions: Record<string, unknown>;
+    };
+  }>;
+  
+  saveCsvReviewSession?: (payload: {
+    csv_path: string;
+    duplicate_decisions: Record<string, unknown>;
+    suspicious_decisions: Record<string, unknown>;
+  }) => Promise<{
+    success: boolean;
+    message: string;
+    path?: string;
+    session?: {
+      csv_path: string;
+      session_id: string;
+      last_updated: string | null;
+      duplicate_decisions: Record<string, unknown>;
+      suspicious_decisions: Record<string, unknown>;
     };
   }>;
 }

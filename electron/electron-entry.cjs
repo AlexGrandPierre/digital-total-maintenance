@@ -628,6 +628,52 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('load-csv-review-session', async (_event, payload = {}) => {
+    const sessionPath = path.join(__dirname, '..', 'modules', 'csv_review_session.py');
+  
+    const result = await runPythonScript(sessionPath, [
+      '--app-data',
+      getAppDataPath(),
+      'load',
+      JSON.stringify(payload),
+    ]);
+  
+    try {
+      return JSON.parse(result.output || '{}');
+    } catch {
+      return {
+        success: false,
+        message:
+          result.errorOutput ||
+          result.output ||
+          'Failed to load CSV review session.',
+      };
+    }
+  });
+  
+  ipcMain.handle('save-csv-review-session', async (_event, payload = {}) => {
+    const sessionPath = path.join(__dirname, '..', 'modules', 'csv_review_session.py');
+  
+    const result = await runPythonScript(sessionPath, [
+      '--app-data',
+      getAppDataPath(),
+      'save',
+      JSON.stringify(payload),
+    ]);
+  
+    try {
+      return JSON.parse(result.output || '{}');
+    } catch {
+      return {
+        success: false,
+        message:
+          result.errorOutput ||
+          result.output ||
+          'Failed to save CSV review session.',
+      };
+    }
+  });
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

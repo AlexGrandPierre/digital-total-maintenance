@@ -37,9 +37,20 @@ ID_COLUMN_HINTS = ["id", "uuid", "guid", "key", "code", "number", "no."]
 SCAN_STARTED_AT = time.time()
 
 
-def emit_progress(rows_scanned, current_stage):
+def emit_progress(
+    rows_scanned,
+    current_stage,
+    duplicate_candidates=0,
+    suspicious_values=0,
+    missing_values=0,
+):
     elapsed_seconds = round(time.time() - SCAN_STARTED_AT, 1)
-    rows_per_second = round(rows_scanned / elapsed_seconds) if elapsed_seconds > 0 else 0
+
+    rows_per_second = (
+        round(rows_scanned / elapsed_seconds)
+        if elapsed_seconds > 0
+        else 0
+    )
 
     print(json.dumps({
         "type": "csv_progress",
@@ -49,6 +60,9 @@ def emit_progress(rows_scanned, current_stage):
         "rows_per_second": rows_per_second,
         "elapsed_seconds": elapsed_seconds,
         "current_stage": current_stage,
+        "duplicate_candidates": duplicate_candidates,
+        "suspicious_values": suspicious_values,
+        "missing_values": missing_values,
     }), flush=True)
 
 
@@ -397,6 +411,10 @@ def scan_csv(csv_path):
         suspicious_examples = []
         suspicious_row_numbers = set()
 
+        duplicate_candidates_count = 0
+        suspicious_values_count = 0
+        missing_values_count = 0
+
         with open(csv_path, "r", encoding="utf-8-sig", newline="") as file:
             reader = csv.DictReader(file)
             columns = reader.fieldnames or []
@@ -424,6 +442,9 @@ def scan_csv(csv_path):
                     emit_progress(
                         rows_scanned=row_count,
                         current_stage="analyzing_rows",
+                        duplicate_candidates=duplicate_candidates_count,
+                        suspicious_values=suspicious_values_count,
+                        missing_values=missing_values_count,
                     )
 
                 normalized_row = {
@@ -476,6 +497,7 @@ def scan_csv(csv_path):
                     if value == "":
                         missing_by_column[column] += 1
                         column_stat["empty"] += 1
+                        missing_values_count += 1
                     else:
                         column_stat["non_empty"] += 1
                         column_stat["unique_values"].add(value)
@@ -496,6 +518,7 @@ def scan_csv(csv_path):
                     if issues:
                         suspicious_by_column[column] += 1
                         suspicious_row_numbers.add(row_count)
+                        suspicious_values_count += len(issues)
 
                         for issue in set(issues):
                             suspicious_by_issue[issue] += 1
@@ -511,6 +534,9 @@ def scan_csv(csv_path):
         emit_progress(
             rows_scanned=row_count,
             current_stage="building_duplicate_groups",
+            duplicate_candidates=duplicate_candidates_count,
+            suspicious_values=suspicious_values_count,
+            missing_values=missing_values_count,
         )
 
         exact_duplicate_row_count = sum(
@@ -559,6 +585,16 @@ def scan_csv(csv_path):
         duplicate_groups = duplicate_groups_all[:DUPLICATE_GROUP_LIMIT]
         duplicate_groups_total = len(duplicate_groups_all)
         hidden_duplicate_groups_count = max(0, duplicate_groups_total - len(duplicate_groups))
+
+        duplicate_candidates_count = len(duplicate_groups_all)
+
+        emit_progress(
+            rows_scanned=row_count,
+            current_stage="building_duplicate_groups",
+            duplicate_candidates=duplicate_candidates_count,
+            suspicious_values=suspicious_values_count,
+            missing_values=missing_values_count,
+        )
 
         duplicate_row_numbers_to_exclude = []
 
@@ -688,6 +724,9 @@ def scan_csv(csv_path):
         emit_progress(
             rows_scanned=row_count,
             current_stage="finalizing_results",
+            duplicate_candidates=duplicate_candidates_count,
+            suspicious_values=suspicious_values_count,
+            missing_values=missing_values_count,
         )
 
         return {
