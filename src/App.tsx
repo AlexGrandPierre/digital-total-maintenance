@@ -64,8 +64,6 @@ type SessionAction =
       type: 'RESET_AFTER_RESCAN';
     };
 
-type ActiveQueueFilter = Exclude<QueueFilter, null>;
-
 type ActionHistoryEntry = {
   id: string;
   timestamp: string;
@@ -195,30 +193,6 @@ function sessionReducer(state: SessionState, action: SessionAction): SessionStat
   }
 
   return state;
-}
-
-function StatCard({
-  label,
-  value,
-  tone = 'neutral',
-}: {
-  label: string;
-  value: number;
-  tone?: 'neutral' | 'warn' | 'good' | 'danger';
-}) {
-  const toneClasses = {
-    neutral: 'bg-white border-slate-200 text-slate-900',
-    warn: 'bg-amber-50 border-amber-200 text-amber-900',
-    good: 'bg-emerald-50 border-emerald-200 text-emerald-900',
-    danger: 'bg-rose-50 border-rose-200 text-rose-900',
-  };
-
-  return (
-    <div className={`rounded-3xl border p-5 shadow-sm transition hover:shadow-md ${toneClasses[tone]}`}>
-      <div className="text-sm font-medium text-slate-500">{label}</div>
-      <div className="mt-3 text-4xl font-semibold tracking-tight">{value}</div>
-    </div>
-  );
 }
 
 function SectionCard({
@@ -635,7 +609,7 @@ function formatDuration(seconds: number) {
 }
 
 function App() {
-  const [scanOutput, setScanOutput] = useState<string>('No scan yet.');
+  const [, setScanOutput] = useState<string>('No scan yet.');
   const [scanData, setScanData] = useState<ScanResult | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [scanPreset, setScanPreset] = useState<ScanPreset>('test');
@@ -903,28 +877,6 @@ function App() {
       removeSortDirection
     );
   }, [scanData, removeSortKey, removeSortDirection, sessionState.resolvedPaths]);
-
-  const reviewPrioritySummary = useMemo(() => {
-    if (!scanData) return [];
-
-    const counts = {
-      high: 0,
-      medium: 0,
-      low: 0,
-    };
-
-    for (const file of scanData.review_files) {
-      if (file.review_priority === 'high') counts.high += 1;
-      else if (file.review_priority === 'medium') counts.medium += 1;
-      else if (file.review_priority === 'low') counts.low += 1;
-    }
-
-    return [
-      ['High priority', counts.high],
-      ['Medium priority', counts.medium],
-      ['Low priority', counts.low],
-    ] as Array<[string, number]>;
-  }, [scanData]);
 
   const decisionReasonSignatures = useMemo(() => {
     if (!scanData?.scan_insights) return new Set<string>();
@@ -1286,80 +1238,6 @@ function App() {
       })
       .filter((entry) => entry.count > 0);
   };
-  
-  const reconcilePatternAfterBatchAction = (
-    preview: Exclude<BatchPreview, null>,
-    actedItems: ClassifiedFile[]
-  ) => {
-    if (actedItems.length === 0) return;
-  
-    const actedPathSet = new Set(actedItems.map((item) => item.path));
-    const patternKey = `${preview.filter.key}:${preview.filter.value}`;
-    const decrement = actedItems.length;
-  
-    setScanData((prev) => {
-      if (!prev?.scan_insights) return prev;
-  
-      const existingPreview = prev.scan_insights.pattern_previews?.[patternKey];
-  
-      const updatedPatternPreview = existingPreview
-        ? {
-            ...existingPreview,
-            review: {
-              ...existingPreview.review,
-              items: existingPreview.review.items.filter((item) => !actedPathSet.has(item.path)),
-            },
-            archive: {
-              ...existingPreview.archive,
-              total:
-                preview.action === 'archive'
-                  ? Math.max(0, existingPreview.archive.total - decrement)
-                  : existingPreview.archive.total,
-              items: existingPreview.archive.items.filter((item) => !actedPathSet.has(item.path)),
-            },
-            remove: {
-              ...existingPreview.remove,
-              total:
-                preview.action === 'remove'
-                  ? Math.max(0, existingPreview.remove.total - decrement)
-                  : existingPreview.remove.total,
-              items: existingPreview.remove.items.filter((item) => !actedPathSet.has(item.path)),
-            },
-          }
-        : null;
-  
-      return {
-        ...prev,
-        scan_insights: {
-          ...prev.scan_insights,
-          review_context_summary:
-            preview.filter.key === 'context_type'
-              ? decrementInsightEntries(
-                  prev.scan_insights.review_context_summary,
-                  preview.filter.value,
-                  decrement
-                )
-              : prev.scan_insights.review_context_summary,
-  
-          top_review_reasons:
-            preview.filter.key === 'reason'
-              ? decrementInsightEntries(
-                  prev.scan_insights.top_review_reasons,
-                  preview.filter.value,
-                  decrement
-                )
-              : prev.scan_insights.top_review_reasons,
-  
-          pattern_previews: updatedPatternPreview
-            ? {
-                ...prev.scan_insights.pattern_previews,
-                [patternKey]: updatedPatternPreview,
-              }
-            : prev.scan_insights.pattern_previews,
-        },
-      };
-    });
-  };
 
   const reconcileInsightsAfterSingleAction = (
     file: ClassifiedFile,
@@ -1487,29 +1365,6 @@ function App() {
         duplicates_total: updatedGroups.length,
       };
     });
-  };
-
-  const handleMoveToReview = async (filePath: string) => {
-    if (isBulkActing) return;
-
-    setBusyPath(filePath);
-    setActionStatus(null);
-
-    try {
-      const result = await performQueueAction('review', filePath);
-
-      setActionStatus({
-        tone: result.success ? 'success' : 'error',
-        message: result.message,
-      });
-    } catch (error) {
-      setActionStatus({
-        tone: 'error',
-        message: error instanceof Error ? error.message : 'Unexpected action failure.',
-      });
-    } finally {
-      setBusyPath(null);
-    }
   };
 
   const handleMoveToArchive = async (filePath: string) => {
@@ -1774,19 +1629,6 @@ function App() {
     };
   }, [csvData]);
 
-  const reviewSummary = useMemo(() => {
-    if (!scanData) return [];
-    return [
-      ['Needs review', scanData.review_total],
-      ['Archive candidates', scanData.archive_total],
-      ['Remove candidates', scanData.remove_total],
-      ['Duplicate groups', scanData.duplicates_total],
-      ['Excluded directories', scanData.excluded_dirs_count],
-      ['Folder scanned', scanData.folder],
-      ['Mode', scanData.mode],
-    ] as Array<[string, number | string]>;
-  }, [scanData]);
-
   const filteredReviewFiles = useMemo(() => {
     return applyQueueFilter(sortedReviewFiles, activeQueueFilter);
   }, [sortedReviewFiles, activeQueueFilter]);
@@ -1810,60 +1652,6 @@ function App() {
   const visibleRemoveCandidates = useMemo(() => {
     return filteredRemoveCandidates.slice(0, removeVisibleCount);
   }, [sortedRemoveCandidates, activeQueueFilter]);
-
-  const handleInsightAction = async (
-    sectionKind: InsightSectionKind,
-    entry: { label: string; count: number },
-    action: InsightActionType
-  ) => {
-    const filter: Exclude<QueueFilter, null> = {
-      label: entry.label,
-      key: sectionKind,
-      value: entry.label,
-    };
-  
-    const matchingReviewFiles = applyQueueFilter(sortedReviewFiles, filter);
-    const matchingArchiveFiles = applyQueueFilter(sortedArchiveCandidates, filter);
-    const matchingRemoveFiles = applyQueueFilter(sortedRemoveCandidates, filter);
-  
-    if (action === 'archive') {
-      if (matchingReviewFiles.length === 0 && matchingArchiveFiles.length === 0) {
-        setActionStatus({
-          tone: 'error',
-          message: `No archiveable files found for "${entry.label}".`,
-        });
-        return;
-      }
-  
-      if (matchingReviewFiles.length > 0) {
-        await handleBulkQueueAction('review', 'archive', matchingReviewFiles);
-      }
-  
-      if (matchingArchiveFiles.length > 0) {
-        await handleBulkQueueAction('archive', 'archive', matchingArchiveFiles);
-      }
-  
-      return;
-    }
-  
-    if (action === 'remove') {
-      if (matchingReviewFiles.length === 0 && matchingRemoveFiles.length === 0) {
-        setActionStatus({
-          tone: 'error',
-          message: `No removable files found for "${entry.label}".`,
-        });
-        return;
-      }
-  
-      if (matchingReviewFiles.length > 0) {
-        await handleBulkQueueAction('review', 'remove', matchingReviewFiles);
-      }
-  
-      if (matchingRemoveFiles.length > 0) {
-        await handleBulkQueueAction('remove', 'remove', matchingRemoveFiles);
-      }
-    }
-  };
 
   const previewConfidence = useMemo(() => {
     if (!batchPreview) return null;
@@ -2148,56 +1936,6 @@ function App() {
     setSelectedBatchPaths(new Set());
   };
 
-  const buildBatchPreview = (
-    items: ClassifiedFile[],
-    filter: ActiveQueueFilter,
-    action: 'archive' | 'remove' | 'keep'
-  ) => {
-    const filtered = applyQueueFilter(items, filter);
-
-    return {
-      filter,
-      action,
-      items: filtered.slice(0, 20),
-      total: filtered.length,
-    };
-  };
-
-  const getPatternPreview = (
-    filter: Exclude<QueueFilter, null>,
-    action: 'archive' | 'remove' | 'keep'
-  ) => {
-    const key = `${filter.key}:${filter.value}`;
-    const preview = scanData?.scan_insights?.pattern_previews?.[key];
-  
-    if (!preview) return null;
-  
-    if (action === 'archive') {
-      return {
-        filter,
-        action,
-        items: preview.archive.items,
-        total: preview.archive.total,
-      };
-    }
-  
-    if (action === 'remove') {
-      return {
-        filter,
-        action,
-        items: preview.remove.items,
-        total: preview.remove.total,
-      };
-    }
-  
-    return {
-      filter,
-      action,
-      items: preview.review.items,
-      total: preview.review.total,
-    };
-  };
-
   const toggleBatchPath = (filePath: string) => {
     setSelectedBatchPaths((prev) => {
       const next = new Set(prev);
@@ -2425,46 +2163,6 @@ function App() {
             : 'Unexpected failure opening CSV export folder.',
       });
     }
-  };
-
-  const handleBulkDatasetDecision = async (decision: DatasetDecision) => {
-    if (!csvData?.success || filteredDuplicateGroups.length === 0) return;
-  
-    setActionStatus(null);
-  
-    let successCount = 0;
-    let failureCount = 0;
-  
-    for (const group of filteredDuplicateGroups) {
-      try {
-        const result = await window.electronAPI?.saveDatasetDecision?.({
-          group_id: group.group_id,
-          decision,
-          csv_path: csvData.path,
-        });
-  
-        if (result?.success && result.decision) {
-          successCount += 1;
-  
-          setDatasetDecisions((prev) => ({
-            ...prev,
-            [group.group_id]: result.decision as DatasetDecisionRecord,
-          }));
-        } else {
-          failureCount += 1;
-        }
-      } catch {
-        failureCount += 1;
-      }
-    }
-  
-    setActionStatus({
-      tone: failureCount === 0 ? 'success' : 'error',
-      message:
-        failureCount === 0
-          ? `Applied "${decision.replace(/_/g, ' ')}" to ${successCount} visible group${successCount === 1 ? '' : 's'}.`
-          : `Bulk decision finished with partial success: ${successCount} saved, ${failureCount} failed.`,
-    });
   };
 
   const filteredDuplicateGroups = useMemo(() => {
@@ -4291,7 +3989,7 @@ function App() {
                           {suspiciousReviewedCount} of {suspiciousExamples.length} suspicious values reviewed.
                         </p>
 
-                        {filteredSuspiciousExamples.length === 0 ? (
+                        {visibleSuspiciousExamplesForReview.length === 0 ? (
                           <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
                             No suspicious value examples detected.
                           </div>

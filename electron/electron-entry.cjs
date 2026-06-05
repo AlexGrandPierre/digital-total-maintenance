@@ -3,6 +3,14 @@ const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
 
+function getBundledPythonPath(name) {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'bundled-python', name);
+  }
+
+  return path.join(__dirname, '..', 'modules', `${name}.py`);
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1440,
@@ -14,12 +22,33 @@ function createWindow() {
     },
   });
 
-  win.loadURL('http://localhost:5173');
+  if (app.isPackaged) {
+    win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+    win.webContents.openDevTools();
+  } else {
+    win.loadURL('http://localhost:5173');
+  }
+}
+
+function spawnPythonScript(scriptPath, args = []) {
+  const command = app.isPackaged ? scriptPath : 'python3';
+  const commandArgs = app.isPackaged ? args : [scriptPath, ...args];
+
+  console.log('Launching Python helper:', {
+    packaged: app.isPackaged,
+    command,
+    commandArgs,
+  });
+
+  return spawn(command, commandArgs);
 }
 
 function runPythonScript(scriptPath, args = []) {
   return new Promise((resolve) => {
-    const py = spawn('python3', [scriptPath, ...args]);
+    const command = app.isPackaged ? scriptPath : 'python3';
+    const commandArgs = app.isPackaged ? args : [scriptPath, ...args];
+
+    const py = spawn(command, commandArgs);
 
     let output = '';
     let errorOutput = '';
@@ -52,9 +81,9 @@ function runPythonScript(scriptPath, args = []) {
 
 function readActionHistory(limit = 20) {
   return new Promise((resolve) => {
-    const historyScriptPath = path.join(__dirname, '..', 'modules', 'action_history.py');
-    const py = spawn('python3', [
-      historyScriptPath,
+    const historyScriptPath = getBundledPythonPath('action_history');
+
+    const py = spawnPythonScript(historyScriptPath, [
       '--app-data',
       getAppDataPath(),
       String(limit),
@@ -76,11 +105,13 @@ function readActionHistory(limit = 20) {
       try {
         resolve(JSON.parse(output || '[]'));
       } catch {
+        console.error('Failed to parse action history:', errorOutput || output);
         resolve([]);
       }
     });
 
-    py.on('error', () => {
+    py.on('error', (err) => {
+      console.error('Failed to launch action history:', err.message);
       resolve([]);
     });
   });
@@ -96,9 +127,9 @@ app.whenReady().then(() => {
   ipcMain.on('scan-desktop', (event, payload = {}) => {
     const preset = payload.preset || 'test';
     const customPath = (payload.customPath || '').trim();
-    const scanPath = path.join(__dirname, '..', 'modules', 'scan.py');
+    const scanPath = getBundledPythonPath('scan');
     const csvPath = (payload.csvPath || '').trim();
-    const csvScanPath = path.join(__dirname, '..', 'modules', 'csv_scan.py');
+    const csvScanPath = getBundledPythonPath('csv_scan');
 
     let targetPath;
 
@@ -117,7 +148,7 @@ app.whenReady().then(() => {
         return;
       }
 
-      const py = spawn('python3', [csvScanPath, csvPath]);
+      const py = spawnPythonScript(csvScanPath, [csvPath]);
 
       let buffer = '';
       let errorOutput = '';
@@ -287,7 +318,7 @@ app.whenReady().then(() => {
       return;
     }
 
-    const py = spawn('python3', [scanPath, targetPath]);
+    const py = spawnPythonScript(scanPath, [targetPath]);
 
     let buffer = '';
     let errorOutput = '';
@@ -393,7 +424,7 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('move-to-review', async (_event, payload = {}) => {
-    const reviewActionPath = path.join(__dirname, '..', 'modules', 'review_action.py');
+    const reviewActionPath = getBundledPythonPath('review_action');
     const filePath = payload.filePath;
     const mode = payload.mode || 'single';
 
@@ -422,7 +453,7 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('move-to-archive', async (_event, payload = {}) => {
-    const archiveActionPath = path.join(__dirname, '..', 'modules', 'archive_action.py');
+    const archiveActionPath = getBundledPythonPath('archive_action');
     const filePath = payload.filePath;
     const mode = payload.mode || 'single';
 
@@ -451,7 +482,7 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('move-to-trash', async (_event, payload = {}) => {
-    const trashActionPath = path.join(__dirname, '..', 'modules', 'trash_action.py');
+    const trashActionPath = getBundledPythonPath('trash_action');
     const filePath = payload.filePath;
     const mode = payload.mode || 'single';
 
@@ -481,7 +512,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle('get-action-history', async (_event, payload = {}) => {
     const limit = Number(payload.limit || 20);
-    const historyPath = path.join(__dirname, '..', 'modules', 'action_history.py');
+    const historyPath = getBundledPythonPath('action_history');
 
     const result = await runPythonScript(historyPath, [
       '--app-data',
@@ -498,7 +529,7 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('restore-from-history', async (_event, payload = {}) => {
-    const restoreActionPath = path.join(__dirname, '..', 'modules', 'restore_action.py');
+    const restoreActionPath = getBundledPythonPath('restore_action');
     const entry = payload.entry;
 
     if (!entry) {
@@ -546,7 +577,7 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('csv-action', async (_event, payload = {}) => {
-    const csvActionPath = path.join(__dirname, '..', 'modules', 'csv_action.py');
+    const csvActionPath = getBundledPythonPath('csv_action');
   
     const result = await runPythonScript(csvActionPath, [
       '--app-data',
@@ -589,7 +620,7 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('get-dataset-decisions', async () => {
-    const decisionPath = path.join(__dirname, '..', 'modules', 'dataset_decision.py');
+    const decisionPath = getBundledPythonPath('dataset_decision');
   
     const result = await runPythonScript(decisionPath, [
       '--app-data',
@@ -609,7 +640,7 @@ app.whenReady().then(() => {
   });
   
   ipcMain.handle('save-dataset-decision', async (_event, payload = {}) => {
-    const decisionPath = path.join(__dirname, '..', 'modules', 'dataset_decision.py');
+    const decisionPath = getBundledPythonPath('dataset_decision');
   
     const result = await runPythonScript(decisionPath, [
       '--app-data',
@@ -629,7 +660,7 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('load-csv-review-session', async (_event, payload = {}) => {
-    const sessionPath = path.join(__dirname, '..', 'modules', 'csv_review_session.py');
+    const sessionPath = getBundledPythonPath('csv_review_session');
   
     const result = await runPythonScript(sessionPath, [
       '--app-data',
@@ -652,7 +683,7 @@ app.whenReady().then(() => {
   });
   
   ipcMain.handle('save-csv-review-session', async (_event, payload = {}) => {
-    const sessionPath = path.join(__dirname, '..', 'modules', 'csv_review_session.py');
+    const sessionPath = getBundledPythonPath('csv_review_session');
   
     const result = await runPythonScript(sessionPath, [
       '--app-data',

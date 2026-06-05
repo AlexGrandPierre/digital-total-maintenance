@@ -11,7 +11,7 @@ from datetime import datetime
 
 PREVIEW_ROW_LIMIT = 10
 SAMPLE_VALUE_LIMIT = 5
-SUSPICIOUS_EXAMPLE_LIMIT = 25
+SUSPICIOUS_EXAMPLE_LIMIT = 1000
 DUPLICATE_GROUP_LIMIT = 1000
 DUPLICATE_GROUP_ROW_LIMIT = 8
 DUPLICATE_GROUP_SAMPLE_LIMIT_PER_BUCKET = 1000
@@ -220,27 +220,106 @@ def inspect_suspicious_value(column, value):
         return issues
 
     column_lower = column.lower()
-    value_lower = str(value).strip().lower()
+    normalized_column = normalize_column_name(column)
+    value_text = str(value).strip()
+    value_lower = value_text.lower()
 
-    if contains_suspicious_characters(value):
-        issues.append("suspicious_characters")
+    is_id_like = any(
+        hint in normalized_column
+        for hint in ["id", "uuid", "guid", "code", "number", "no"]
+    )
 
-    if contains_non_ascii_characters(value) and any(
-        hint in column_lower for hint in ["id", "code", "email", "date", "number"]
+    is_email_like = "email" in normalized_column
+    is_date_like_column = any(
+        hint in normalized_column
+        for hint in ["date", "dob", "birth"]
+    )
+
+    is_name_like = any(
+        hint in normalized_column
+        for hint in ["name", "firstname", "first name", "lastname", "last name", "surname"]
+    )
+
+    is_phone_like = any(
+        hint in normalized_column
+        for hint in ["phone", "mobile", "telephone", "tel"]
+    )
+
+    # Clearly corrupted / encoding-related
+    if contains_suspicious_characters(value_text):
+        issues.append("corrupted_or_control_characters")
+
+    if contains_non_ascii_characters(value_text) and (
+        is_id_like or is_email_like or is_date_like_column or is_phone_like
     ):
         issues.append("unexpected_non_ascii_in_structured_field")
 
-    if is_suspicious_default_date(value):
-        issues.append("default_or_placeholder_date")
+    # Placeholder / default values
+    if is_suspicious_default_date(value_text):
+        issues.append("placeholder_or_default_date")
 
-    if is_very_old_date(value):
-        issues.append("very_old_date")
+    if value_lower in {
+        "unknown",
+        "n/a",
+        "na",
+        "null",
+        "none",
+        "test",
+        "dummy",
+        "placeholder",
+        "tbd",
+    }:
+        issues.append("placeholder_text_value")
 
-    if "email" in column_lower and value_lower and "@" not in value_lower:
-        issues.append("email_like_column_without_email_format")
+    # Dates
+    if is_date_like_column:
+        parsed = parse_date(value_text)
 
-    if "date" in column_lower and value_lower and not is_date_like(value_lower):
-        issues.append("date_like_column_with_unparsed_value")
+        if parsed is None:
+            issues.append("date_like_column_with_unparsed_value")
+        else:
+            current_year = datetime.now().year
+
+            if parsed.year < 1900:
+                issues.append("implausibly_old_date")
+            elif parsed.year < 1926:
+                issues.append("very_old_date")
+
+            if parsed.year > current_year + 1:
+                issues.append("future_date")
+
+    # Email structure
+    if is_email_like:
+        if "@" not in value_lower:
+            issues.append("email_like_column_without_email_format")
+        elif not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", value_lower):
+            issues.append("malformed_email_format")
+
+    # Phone structure
+    if is_phone_like:
+        digits = re.sub(r"\D", "", value_text)
+
+        if len(digits) > 0 and len(digits) < 7:
+            issues.append("phone_number_too_short")
+
+        if len(digits) > 15:
+            issues.append("phone_number_too_long")
+
+    # ID structure
+    if is_id_like:
+        if len(value_text) <= 2:
+            issues.append("id_value_too_short")
+
+        if any(space in value_text for space in [" ", "\t", "\n"]):
+            issues.append("id_value_contains_whitespace")
+
+    # Name structure
+    if is_name_like:
+        if any(char.isdigit() for char in value_text):
+            issues.append("name_contains_digits")
+
+        if len(value_text) == 1:
+            issues.append("single_character_name")
 
     return issues
 
