@@ -331,6 +331,129 @@ def export_clean_copy(
         },
     }
 
+def get_decision(decisions, key, default="pending"):
+    record = decisions.get(key, {})
+
+    if isinstance(record, dict):
+        return record.get("decision", default)
+
+    return default
+
+def export_duplicate_groups_by_decision(
+    app_data_path,
+    csv_path,
+    duplicate_groups,
+    dataset_decisions,
+    target_decision,
+    export_label,
+):
+    export_dir = ensure_export_dir(app_data_path)
+    columns, source_rows = read_csv_rows(csv_path)
+
+    source_by_row_number = {
+        row["row_number"]: row for row in source_rows
+    }
+
+    export_rows = []
+
+    for group_index, group in enumerate(duplicate_groups, start=1):
+        group_id = group.get("group_id")
+        decision = get_decision(dataset_decisions, group_id)
+
+        if decision != target_decision:
+            continue
+
+        row_numbers = [
+            row_number
+            for row_number in group.get("row_numbers", [])
+            if isinstance(row_number, int)
+        ]
+
+        for row_number in row_numbers:
+            source_row = source_by_row_number.get(row_number)
+
+            if not source_row:
+                continue
+
+            export_rows.append({
+                "row_number": row_number,
+                "values": {
+                    "DTM Duplicate Group": group_index,
+                    **source_row["values"],
+                },
+            })
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_name = safe_filename(os.path.splitext(os.path.basename(csv_path))[0])
+    export_path = os.path.join(
+        export_dir,
+        f"{base_name}_{export_label}_{timestamp}.csv",
+    )
+
+    write_rows(export_path, ["DTM Duplicate Group", *columns], export_rows)
+
+    return {
+        "success": True,
+        "action": export_label,
+        "message": (
+            f"Exported {len(export_rows)} row(s) for "
+            f"{target_decision.replace('_', ' ')} duplicate groups."
+        ),
+        "export_path": export_path,
+        "row_count": len(export_rows),
+    }
+
+def export_suspicious_rows_by_decision(
+    app_data_path,
+    csv_path,
+    suspicious_decisions,
+    target_decision,
+    export_label,
+):
+    export_dir = ensure_export_dir(app_data_path)
+    columns, source_rows = read_csv_rows(csv_path)
+
+    source_by_row_number = {
+        row["row_number"]: row for row in source_rows
+    }
+
+    target_row_numbers = sorted(
+        set(
+            record.get("row_number")
+            for record in suspicious_decisions.values()
+            if isinstance(record, dict)
+            and record.get("decision") == target_decision
+            and isinstance(record.get("row_number"), int)
+        )
+    )
+
+    export_rows = [
+        source_by_row_number[row_number]
+        for row_number in target_row_numbers
+        if row_number in source_by_row_number
+    ]
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_name = safe_filename(os.path.splitext(os.path.basename(csv_path))[0])
+
+    export_path = os.path.join(
+        export_dir,
+        f"{base_name}_{export_label}_{timestamp}.csv",
+    )
+
+    write_rows(export_path, columns, export_rows)
+
+    return {
+        "success": True,
+        "action": export_label,
+        "message": (
+            f"Exported {len(export_rows)} suspicious row(s) marked as "
+            f"{target_decision.replace('_', ' ')}."
+        ),
+        "export_path": export_path,
+        "row_count": len(export_rows),
+    }
+
 
 def run_action(app_data_path, payload):
     action = payload.get("action")
@@ -372,6 +495,44 @@ def run_action(app_data_path, payload):
             trim_whitespace=payload.get("trim_whitespace", True),
             exclude_duplicate_rows=payload.get("exclude_duplicate_rows", False),
             exclude_suspicious_rows=payload.get("exclude_suspicious_rows", False),
+        )
+    
+    if action == "export_approved_duplicates":
+        return export_duplicate_groups_by_decision(
+            app_data_path=app_data_path,
+            csv_path=csv_path,
+            duplicate_groups=payload.get("duplicate_groups", []),
+            dataset_decisions=payload.get("dataset_decisions", {}),
+            target_decision="approved_duplicate",
+            export_label="approved_duplicates",
+        )
+
+    if action == "export_duplicate_needs_review":
+        return export_duplicate_groups_by_decision(
+            app_data_path=app_data_path,
+            csv_path=csv_path,
+            duplicate_groups=payload.get("duplicate_groups", []),
+            dataset_decisions=payload.get("dataset_decisions", {}),
+            target_decision="needs_review",
+            export_label="duplicate_needs_review",
+        )
+
+    if action == "export_corrupted_suspicious_rows":
+        return export_suspicious_rows_by_decision(
+            app_data_path=app_data_path,
+            csv_path=csv_path,
+            suspicious_decisions=payload.get("suspicious_decisions", {}),
+            target_decision="corrupted",
+            export_label="corrupted_suspicious_rows",
+        )
+
+    if action == "export_suspicious_needs_review":
+        return export_suspicious_rows_by_decision(
+            app_data_path=app_data_path,
+            csv_path=csv_path,
+            suspicious_decisions=payload.get("suspicious_decisions", {}),
+            target_decision="needs_review",
+            export_label="suspicious_needs_review",
         )
 
     return {

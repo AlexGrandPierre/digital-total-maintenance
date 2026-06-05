@@ -61,7 +61,9 @@ type CsvScanProgress = {
   duplicate_candidates?: number;
   suspicious_values?: number;
   missing_values?: number;
+  total_rows_estimate?: number | null;
   current_stage:
+    | 'starting'
     | 'analyzing_rows'
     | 'building_duplicate_groups'
     | 'finalizing_results';
@@ -98,7 +100,9 @@ interface ElectronAPI {
             duplicate_candidates?: number;
             suspicious_values?: number;
             missing_values?: number;
+            total_rows_estimate?: number | null;
             current_stage:
+              | 'starting'
               | 'analyzing_rows'
               | 'building_duplicate_groups'
               | 'finalizing_results';
@@ -125,6 +129,10 @@ interface ElectronAPI {
     action:
   | 'export_duplicate_groups'
   | 'export_suspicious_rows'
+  | 'export_approved_duplicates'
+  | 'export_duplicate_needs_review'
+  | 'export_corrupted_suspicious_rows'
+  | 'export_suspicious_needs_review'
   | 'export_clean_copy';
     csv_path: string;
     duplicate_groups?: unknown[];
@@ -135,6 +143,7 @@ interface ElectronAPI {
     trim_whitespace?: boolean;
     exclude_duplicate_rows?: boolean;
     exclude_suspicious_rows?: boolean;
+    suspicious_decisions?: Record<string, unknown>;
     duplicate_row_numbers_to_exclude?: number[];
     dataset_decisions?: Record<string, unknown>;
   }) => Promise<{

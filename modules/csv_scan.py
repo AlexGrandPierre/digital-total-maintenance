@@ -12,9 +12,9 @@ from datetime import datetime
 PREVIEW_ROW_LIMIT = 10
 SAMPLE_VALUE_LIMIT = 5
 SUSPICIOUS_EXAMPLE_LIMIT = 25
-DUPLICATE_GROUP_LIMIT = 200
+DUPLICATE_GROUP_LIMIT = 1000
 DUPLICATE_GROUP_ROW_LIMIT = 8
-DUPLICATE_GROUP_SAMPLE_LIMIT_PER_BUCKET = 75
+DUPLICATE_GROUP_SAMPLE_LIMIT_PER_BUCKET = 1000
 
 IDENTITY_COLUMN_HINTS = [
     "first name",
@@ -43,6 +43,7 @@ def emit_progress(
     duplicate_candidates=0,
     suspicious_values=0,
     missing_values=0,
+    total_rows_estimate=None,
 ):
     elapsed_seconds = round(time.time() - SCAN_STARTED_AT, 1)
 
@@ -59,6 +60,7 @@ def emit_progress(
         "rows_scanned": rows_scanned,
         "rows_per_second": rows_per_second,
         "elapsed_seconds": elapsed_seconds,
+        "total_rows_estimate": total_rows_estimate,
         "current_stage": current_stage,
         "duplicate_candidates": duplicate_candidates,
         "suspicious_values": suspicious_values,
@@ -393,6 +395,129 @@ def build_data_quality_insights(
 
     return insights
 
+def get_decision(decisions, key, default="pending"):
+    record = decisions.get(key, {})
+    if isinstance(record, dict):
+        return record.get("decision", default)
+    return default
+
+def export_duplicate_groups_by_decision(
+    app_data_path,
+    csv_path,
+    duplicate_groups,
+    dataset_decisions,
+    target_decision,
+    export_label,
+):
+    export_dir = ensure_export_dir(app_data_path)
+    columns, source_rows = read_csv_rows(csv_path)
+
+    source_by_row_number = {
+        row["row_number"]: row for row in source_rows
+    }
+
+    export_rows = []
+
+    for group_index, group in enumerate(duplicate_groups, start=1):
+        group_id = group.get("group_id")
+        decision = get_decision(dataset_decisions, group_id)
+
+        if decision != target_decision:
+            continue
+
+        for row_number in group.get("row_numbers", []):
+            if row_number in source_by_row_number:
+                source_row = source_by_row_number[row_number]
+                export_rows.append({
+                    "row_number": source_row["row_number"],
+                    "values": {
+                        "DTM Duplicate Group": group_index,
+                        **source_row["values"],
+                    },
+                })
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_name = safe_filename(os.path.splitext(os.path.basename(csv_path))[0])
+    export_path = os.path.join(
+        export_dir,
+        f"{base_name}_{export_label}_{timestamp}.csv",
+    )
+
+    write_rows(export_path, ["DTM Duplicate Group", *columns], export_rows)
+
+    return {
+        "success": True,
+        "action": export_label,
+        "message": f"Exported {len(export_rows)} row(s) for {target_decision.replace('_', ' ')} duplicate groups.",
+        "export_path": export_path,
+        "row_count": len(export_rows),
+    }
+
+def export_suspicious_rows_by_decision(
+    app_data_path,
+    csv_path,
+    suspicious_decisions,
+    target_decision,
+    export_label,
+):
+    export_dir = ensure_export_dir(app_data_path)
+    columns, source_rows = read_csv_rows(csv_path)
+
+    source_by_row_number = {
+        row["row_number"]: row for row in source_rows
+    }
+
+    target_row_numbers = sorted(set(
+        record.get("row_number")
+        for record in suspicious_decisions.values()
+        if isinstance(record, dict)
+        and record.get("decision") == target_decision
+        and isinstance(record.get("row_number"), int)
+    ))
+
+    export_rows = [
+        source_by_row_number[row_number]
+        for row_number in target_row_numbers
+        if row_number in source_by_row_number
+    ]
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_name = safe_filename(os.path.splitext(os.path.basename(csv_path))[0])
+    export_path = os.path.join(
+        export_dir,
+        f"{base_name}_{export_label}_{timestamp}.csv",
+    )
+
+    write_rows(export_path, columns, export_rows)
+
+    return {
+        "success": True,
+        "action": export_label,
+        "message": f"Exported {len(export_rows)} suspicious row(s) marked as {target_decision.replace('_', ' ')}.",
+        "export_path": export_path,
+        "row_count": len(export_rows),
+    }
+
+def estimate_total_rows(csv_path):
+    try:
+        with open(csv_path, "rb") as file:
+            sample = file.read(1024 * 1024)
+
+        if not sample:
+            return None
+
+        newline_count = sample.count(b"\n")
+        file_size = os.path.getsize(csv_path)
+
+        if newline_count == 0:
+            return None
+
+        estimated_rows = int((newline_count / len(sample)) * file_size)
+
+        return max(0, estimated_rows - 1)
+    except Exception:
+        return None
+
 
 def scan_csv(csv_path):
     if not csv_path or not os.path.exists(csv_path):
@@ -401,6 +526,8 @@ def scan_csv(csv_path):
     try:
         preview_rows = []
         row_count = 0
+
+        total_rows_estimate = estimate_total_rows(csv_path)
 
         duplicate_key_columns = []
         duplicate_groups_by_key = {}
@@ -414,6 +541,15 @@ def scan_csv(csv_path):
         duplicate_candidates_count = 0
         suspicious_values_count = 0
         missing_values_count = 0
+
+        emit_progress(
+            rows_scanned=0,
+            current_stage="starting",
+            duplicate_candidates=0,
+            suspicious_values=0,
+            missing_values=0,
+            total_rows_estimate=total_rows_estimate,
+        )
 
         with open(csv_path, "r", encoding="utf-8-sig", newline="") as file:
             reader = csv.DictReader(file)
@@ -437,15 +573,6 @@ def scan_csv(csv_path):
 
             for row in reader:
                 row_count += 1
-
-                if row_count % 10000 == 0:
-                    emit_progress(
-                        rows_scanned=row_count,
-                        current_stage="analyzing_rows",
-                        duplicate_candidates=duplicate_candidates_count,
-                        suspicious_values=suspicious_values_count,
-                        missing_values=missing_values_count,
-                    )
 
                 normalized_row = {
                     column: normalize_cell(row.get(column, ""))
@@ -531,12 +658,33 @@ def scan_csv(csv_path):
                                 "issues": issues,
                             })
 
+                if row_count % 1000 == 0:
+                    live_duplicate_candidates = sum(
+                        1 for group in duplicate_groups_by_key.values()
+                        if group["count"] >= 2
+                    )
+
+                    emit_progress(
+                        rows_scanned=row_count,
+                        current_stage="analyzing_rows",
+                        duplicate_candidates=live_duplicate_candidates,
+                        suspicious_values=suspicious_values_count,
+                        missing_values=missing_values_count,
+                        total_rows_estimate=total_rows_estimate,
+                    )
+
+        live_duplicate_candidates = sum(
+            1 for group in duplicate_groups_by_key.values()
+            if group["count"] >= 2
+        )
+
         emit_progress(
             rows_scanned=row_count,
             current_stage="building_duplicate_groups",
-            duplicate_candidates=duplicate_candidates_count,
+            duplicate_candidates=live_duplicate_candidates,
             suspicious_values=suspicious_values_count,
             missing_values=missing_values_count,
+            total_rows_estimate=total_rows_estimate,
         )
 
         exact_duplicate_row_count = sum(
@@ -585,15 +733,15 @@ def scan_csv(csv_path):
         duplicate_groups = duplicate_groups_all[:DUPLICATE_GROUP_LIMIT]
         duplicate_groups_total = len(duplicate_groups_all)
         hidden_duplicate_groups_count = max(0, duplicate_groups_total - len(duplicate_groups))
-
         duplicate_candidates_count = len(duplicate_groups_all)
 
         emit_progress(
             rows_scanned=row_count,
             current_stage="building_duplicate_groups",
-            duplicate_candidates=duplicate_candidates_count,
+            duplicate_candidates=live_duplicate_candidates,
             suspicious_values=suspicious_values_count,
             missing_values=missing_values_count,
+            total_rows_estimate=total_rows_estimate,
         )
 
         duplicate_row_numbers_to_exclude = []
@@ -724,9 +872,10 @@ def scan_csv(csv_path):
         emit_progress(
             rows_scanned=row_count,
             current_stage="finalizing_results",
-            duplicate_candidates=duplicate_candidates_count,
+            duplicate_candidates=live_duplicate_candidates,
             suspicious_values=suspicious_values_count,
             missing_values=missing_values_count,
+            total_rows_estimate=total_rows_estimate,
         )
 
         return {
