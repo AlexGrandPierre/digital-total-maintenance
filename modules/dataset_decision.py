@@ -69,11 +69,40 @@ def save_decision(app_data_path, payload):
         "decision": decisions[group_id],
     }
 
+def reset_decisions_for_csv(app_data_path, payload):
+    csv_path = payload.get("csv_path", "")
+
+    if not csv_path:
+        return {
+            "success": False,
+            "message": "No CSV path provided.",
+        }
+
+    decisions = read_decisions(app_data_path)
+
+    kept_decisions = {
+        key: value
+        for key, value in decisions.items()
+        if value.get("csv_path") != csv_path
+    }
+
+    removed_count = len(decisions) - len(kept_decisions)
+
+    write_decisions(app_data_path, kept_decisions)
+
+    return {
+        "success": True,
+        "message": f"Reset {removed_count} duplicate decision(s) for this dataset.",
+        "removed_count": removed_count,
+        "decisions": kept_decisions,
+    }
+
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--app-data", required=True)
-    parser.add_argument("action", choices=["read", "save"])
+    parser.add_argument("--dtm-root", required=False)
+    parser.add_argument("action", choices=["read", "save", "reset_csv"])
     parser.add_argument("payload_json", nargs="?", default="{}")
     args = parser.parse_args()
 
@@ -86,6 +115,11 @@ def main():
             return
 
         payload = json.loads(args.payload_json)
+
+        if args.action == "reset_csv":
+            print(json.dumps(reset_decisions_for_csv(args.app_data, payload)))
+            return
+
         print(json.dumps(save_decision(args.app_data, payload)))
     except Exception as error:
         print(json.dumps({

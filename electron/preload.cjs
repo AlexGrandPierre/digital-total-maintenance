@@ -41,4 +41,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   saveCsvReviewSession: (payload) =>
     ipcRenderer.invoke('save-csv-review-session', payload),
+
+  openDtmFolder: () => ipcRenderer.invoke('open-dtm-folder'),
+
+  resetDatasetDecisions: (payload) =>
+    ipcRenderer.invoke('reset-dataset-decisions', payload),
 });

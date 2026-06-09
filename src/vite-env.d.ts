@@ -234,6 +234,20 @@ interface ElectronAPI {
       suspicious_decisions: Record<string, unknown>;
     };
   }>;
+
+  openDtmFolder: () => Promise<{
+    success: boolean;
+    path?: string;
+    message: string;
+  }>;
+
+  resetDatasetDecisions: (payload: {
+    csv_path: string;
+  }) => Promise<{
+    success: boolean;
+    message: string;
+    removed_count?: number;
+  }>;
 }
 
 interface Window {

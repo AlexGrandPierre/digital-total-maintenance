@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['modules/restore_action.py'],
+    ['modules/action_history.py'],
     pathex=[],
     binaries=[],
     datas=[],

@@ -5,10 +5,32 @@ from pathlib import Path
 from datetime import datetime, timezone
 from action_history import append_action_history
 
-def strip_app_data_args(args: list[str]) -> list[str]:
-    if len(args) >= 2 and args[0] == "--app-data":
-        return args[2:]
-    return args
+def parse_args(args: list[str]) -> dict:
+    parsed = {
+        "app_data": None,
+        "dtm_root": None,
+        "remaining": [],
+    }
+
+    index = 0
+
+    while index < len(args):
+        arg = args[index]
+
+        if arg == "--app-data" and index + 1 < len(args):
+            parsed["app_data"] = args[index + 1]
+            index += 2
+            continue
+
+        if arg == "--dtm-root" and index + 1 < len(args):
+            parsed["dtm_root"] = args[index + 1]
+            index += 2
+            continue
+
+        parsed["remaining"].append(arg)
+        index += 1
+
+    return parsed
 
 def restore_from_history(entry: dict) -> dict:
     action = entry.get("action")
@@ -96,7 +118,8 @@ def restore_from_history(entry: dict) -> dict:
     }
 
 if __name__ == "__main__":
-    args = strip_app_data_args(sys.argv[1:])
+    parsed = parse_args(sys.argv[1:])
+    args = parsed["remaining"]
 
     if len(args) < 1:
         print(json.dumps({

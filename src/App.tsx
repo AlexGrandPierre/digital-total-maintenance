@@ -612,7 +612,7 @@ function App() {
   const [, setScanOutput] = useState<string>('No scan yet.');
   const [scanData, setScanData] = useState<ScanResult | null>(null);
   const [isScanning, setIsScanning] = useState(false);
-  const [scanPreset, setScanPreset] = useState<ScanPreset>('test');
+  const [scanPreset, setScanPreset] = useState<ScanPreset>('desktop');
   const [customPath, setCustomPath] = useState('');
   const [showSystemFiles, setShowSystemFiles] = useState(false);
   const [csvPath, setCsvPath] = useState('');
@@ -674,7 +674,7 @@ function App() {
 
   const [csvData, setCsvData] = useState<CsvScanResult | null>(null);
 
-  const [lastCsvExportPath, setLastCsvExportPath] = useState<string | null>(null);
+  const [, setLastCsvExportPath] = useState<string | null>(null);
 
   const [reviewQueueFilter, setReviewQueueFilter] = useState<
     'all' | 'high' | 'medium' | 'low'
@@ -2049,11 +2049,110 @@ function App() {
     }
   };
 
+  const handleResetDatasetDecisions = async () => {
+    if (!csvData?.path) return;
+  
+    const confirmed = window.confirm(
+      'Reset all duplicate decisions for this dataset?'
+    );
+  
+    if (!confirmed) return;
+  
+    try {
+      const result =
+        await window.electronAPI?.resetDatasetDecisions?.({
+          csv_path: csvData.path,
+        });
+  
+        if (result?.success) {
+          await loadDatasetDecisions();
+        
+          setSuspiciousDecisions((prev) => {
+            if (!csvData?.path) return prev;
+        
+            return Object.fromEntries(
+              Object.entries(prev).filter(([, record]) => {
+                return record.csv_path !== csvData.path;
+              })
+            );
+          });
+        
+          setActionStatus({
+            tone: 'success',
+            message: `${result.message} Suspicious value decisions for this dataset were also reset.`,
+          });
+        }else {
+        setActionStatus({
+          tone: 'error',
+          message:
+            result?.message ||
+            'Failed to reset dataset decisions.',
+        });
+      }
+    } catch (error) {
+      setActionStatus({
+        tone: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Unexpected dataset reset failure.',
+      });
+    }
+  };
+
+  const handleBulkDatasetDecision = async (decision: DatasetDecision) => {
+    if (!csvData?.success) return;
+  
+    setActionStatus(null);
+  
+    let successCount = 0;
+    let failureCount = 0;
+  
+    for (const group of visibleDuplicateGroupsForReview) {
+      try {
+        const result = await window.electronAPI?.saveDatasetDecision?.({
+          group_id: group.group_id,
+          decision,
+          csv_path: csvData.path,
+        });
+  
+        if (result?.success && result.decision) {
+          successCount += 1;
+  
+          setDatasetDecisions((prev) => ({
+            ...prev,
+            [group.group_id]: result.decision as DatasetDecisionRecord,
+          }));
+        } else {
+          failureCount += 1;
+        }
+      } catch {
+        failureCount += 1;
+      }
+    }
+  
+    setActionStatus({
+      tone: failureCount === 0 ? 'success' : 'error',
+      message:
+        failureCount === 0
+          ? `Marked ${successCount} visible duplicate group(s) as ${decision.replace(/_/g, ' ')}.`
+          : `Bulk decision finished with partial success: ${successCount} succeeded, ${failureCount} failed.`,
+    });
+  };
+
   const getSuspiciousIssueId = (example: {
     row_number: number;
     column: string;
+    value?: string;
   }) => {
-    return `suspicious-${example.row_number}-${example.column}`;
+    const datasetPath = csvData?.path ?? 'unknown-dataset';
+  
+    return [
+      datasetPath,
+      example.row_number,
+      example.column,
+      example.value ?? '',
+    ].join('::');
   };
 
   useEffect(() => {
@@ -2069,6 +2168,49 @@ function App() {
   
     return () => window.clearTimeout(timeoutId);
   }, [csvData?.path, csvData?.success, datasetDecisions, suspiciousDecisions]);
+
+  const handleBulkSuspiciousDecision = async (
+    decision: SuspiciousDecision
+  ) => {
+    if (!csvData?.success) return;
+  
+    setActionStatus(null);
+  
+    let successCount = 0;
+    let failureCount = 0;
+  
+    for (const example of visibleSuspiciousExamplesForReview) {
+      try {
+        const issueId = getSuspiciousIssueId(example);
+  
+        const record: SuspiciousDecisionRecord = {
+          issue_id: issueId,
+          decision,
+          csv_path: csvData.path,
+          row_number: example.row_number,
+          column: example.column,
+          updated_at: new Date().toISOString(),
+        };
+  
+        setSuspiciousDecisions((prev) => ({
+          ...prev,
+          [issueId]: record,
+        }));
+  
+        successCount += 1;
+      } catch {
+        failureCount += 1;
+      }
+    }
+  
+    setActionStatus({
+      tone: failureCount === 0 ? 'success' : 'error',
+      message:
+        failureCount === 0
+          ? `Marked ${successCount} visible suspicious value(s) as ${decision.replace(/_/g, ' ')}.`
+          : `Bulk suspicious decision finished with partial success: ${successCount} succeeded, ${failureCount} failed.`,
+    });
+  };
 
   const loadCsvReviewSession = async (csvPath: string) => {
     try {
@@ -2165,6 +2307,15 @@ function App() {
     }
   };
 
+  const handleOpenDtmFolder = async () => {
+    const result = await window.electronAPI?.openDtmFolder?.();
+  
+    setActionStatus({
+      tone: result?.success ? 'success' : 'error',
+      message: result?.message ?? 'Failed to open DTM folder.',
+    });
+  };
+
   const filteredDuplicateGroups = useMemo(() => {
     let groups =
       reviewQueueFilter === 'high'
@@ -2241,21 +2392,30 @@ function App() {
   }, [csvData, datasetDecisions]);
 
   const suspiciousExamples =
-    csvData?.suspicious_value_summary?.examples ?? [];
+  csvData?.suspicious_value_summary?.examples ?? [];
 
-  const suspiciousReviewedCount =
-    Object.keys(suspiciousDecisions).length;
+  const suspiciousReviewedCount = useMemo(() => {
+    return suspiciousExamples.filter((example) => {
+      const issueId = getSuspiciousIssueId(example);
+      const decision = suspiciousDecisions[issueId]?.decision || 'pending';
 
-  const suspiciousPendingCount =
-    suspiciousExamples.length - suspiciousReviewedCount;
+      return decision !== 'pending';
+    }).length;
+  }, [suspiciousExamples, suspiciousDecisions, csvData?.path]);
+
+  const suspiciousPendingCount = Math.max(
+    0,
+    suspiciousExamples.length - suspiciousReviewedCount
+  );
 
   const suspiciousCompletionPercentage =
     suspiciousExamples.length === 0
       ? 0
-      : Math.round(
-          (suspiciousReviewedCount /
-            suspiciousExamples.length) *
-            100
+      : Math.min(
+          100,
+          Math.round(
+            (suspiciousReviewedCount / suspiciousExamples.length) * 100
+          )
         );
   
   const [showDuplicateExportMenu, setShowDuplicateExportMenu] = useState(false);
@@ -2646,12 +2806,6 @@ function App() {
             </div>
 
             <div className="flex flex-wrap gap-3">
-              <ModePill
-                active={scanPreset === 'test'}
-                label="Test Folder"
-                disabled={isBulkActing}
-                onClick={() => setScanPreset('test')}
-              />
               <ModePill
                 active={scanPreset === 'desktop'}
                 label="Desktop"
@@ -3532,12 +3686,26 @@ function App() {
                       </div>
                     </div>
 
-                    <div className="mb-4 flex items-start justify-between gap-4">
+                    <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                       <button
-                          onClick={() => handleCsvAction('export_clean_copy')}
-                          className="rounded-full bg-emerald-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-emerald-800"
-                        >
-                          Export clean copy
+                        onClick={() => handleCsvAction('export_clean_copy')}
+                        className="rounded-full bg-emerald-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-emerald-800"
+                      >
+                        Export clean copy
+                      </button>
+
+                      <button
+                        onClick={handleResetDatasetDecisions}
+                        className="rounded-full bg-rose-900 px-3 py-1.5 text-xs font-semibold text-white"
+                      >
+                        Reset Decisions
+                      </button>
+
+                      <button
+                        onClick={handleOpenCsvExportFolder}
+                        className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
+                      >
+                        Open Export Folder
                       </button>
                     </div>
 
@@ -3644,6 +3812,36 @@ function App() {
                               {label}
                             </button>
                           ))}
+                        </div>
+
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            onClick={() => handleBulkDatasetDecision('approved_duplicate')}
+                            className="rounded-full bg-emerald-900 px-3 py-1.5 text-xs font-semibold text-white"
+                          >
+                            Approve Visible
+                          </button>
+
+                          <button
+                            onClick={() => handleBulkDatasetDecision('legitimate_records')}
+                            className="rounded-full bg-sky-900 px-3 py-1.5 text-xs font-semibold text-white"
+                          >
+                            Legitimate Visible
+                          </button>
+
+                          <button
+                            onClick={() => handleBulkDatasetDecision('needs_review')}
+                            className="rounded-full bg-amber-900 px-3 py-1.5 text-xs font-semibold text-white"
+                          >
+                            Needs Review Visible
+                          </button>
+
+                          <button
+                            onClick={() => handleBulkDatasetDecision('ignored')}
+                            className="rounded-full bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white"
+                          >
+                            Ignore Visible
+                          </button>
                         </div>
 
                         <div className="mt-4 grid grid-cols-3 gap-3">
@@ -3944,6 +4142,36 @@ function App() {
                           ))}
                         </div>
 
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            onClick={() => handleBulkSuspiciousDecision('valid_data')}
+                            className="rounded-full bg-emerald-900 px-3 py-1.5 text-xs font-semibold text-white"
+                          >
+                            Valid Visible
+                          </button>
+
+                          <button
+                            onClick={() => handleBulkSuspiciousDecision('corrupted')}
+                            className="rounded-full bg-rose-900 px-3 py-1.5 text-xs font-semibold text-white"
+                          >
+                            Corrupted Visible
+                          </button>
+
+                          <button
+                            onClick={() => handleBulkSuspiciousDecision('needs_review')}
+                            className="rounded-full bg-amber-900 px-3 py-1.5 text-xs font-semibold text-white"
+                          >
+                            Needs Review Visible
+                          </button>
+
+                          <button
+                            onClick={() => handleBulkSuspiciousDecision('ignored')}
+                            className="rounded-full bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white"
+                          >
+                            Ignore Visible
+                          </button>
+                        </div>
+
                         <div className="mt-4 grid grid-cols-3 gap-3">
                           <div className="rounded-xl bg-white px-3 py-3 ring-1 ring-rose-100">
                             <div className="text-xs uppercase tracking-[0.16em] text-rose-700">
@@ -4092,17 +4320,6 @@ function App() {
                           </div>
                         )}
                       </div>
-                    </div>
-
-                    <div className="mb-4 flex items-start justify-between gap-4">
-                      {lastCsvExportPath ? (
-                        <button
-                          onClick={handleOpenCsvExportFolder}
-                          className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
-                        >
-                          Open Export Folder
-                        </button>
-                      ) : null}
                     </div>
 
                   </section>
@@ -5212,7 +5429,7 @@ function App() {
                     Run a scan to populate the maintenance dashboard
                   </h2>
                   <p className="mt-3 text-sm leading-7 text-slate-500">
-                    Start with your test folder for rapid iteration, then switch to Desktop when
+                    Start with any local file enviornment and switch when
                     you want broader validation. The dashboard will keep evolving around these
                     structured result states.
                   </p>

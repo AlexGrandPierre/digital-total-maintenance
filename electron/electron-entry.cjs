@@ -12,9 +12,13 @@ function getBundledPythonPath(name) {
 }
 
 function createWindow() {
+  const iconPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'build', 'icon.png')
+    : path.join(__dirname, '..', 'build', 'icon.png');
   const win = new BrowserWindow({
     width: 1440,
     height: 960,
+    icon: iconPath,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -24,7 +28,6 @@ function createWindow() {
 
   if (app.isPackaged) {
     win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
-    win.webContents.openDevTools();
   } else {
     win.loadURL('http://localhost:5173');
   }
@@ -86,6 +89,8 @@ function readActionHistory(limit = 20) {
     const py = spawnPythonScript(historyScriptPath, [
       '--app-data',
       getAppDataPath(),
+      '--dtm-root',
+      getDtmDesktopRoot().root,
       String(limit),
       'read',
     ]);
@@ -119,6 +124,21 @@ function readActionHistory(limit = 20) {
 
 function getAppDataPath() {
   return app.getPath('userData');
+}
+
+function getDtmDesktopRoot() {
+  const root = path.join(app.getPath('desktop'), 'Digital Total Maintenance');
+  const localHistory = path.join(root, 'Local Action History');
+  const exportsDir = path.join(root, 'Exports');
+
+  fs.mkdirSync(localHistory, { recursive: true });
+  fs.mkdirSync(exportsDir, { recursive: true });
+
+  return {
+    root,
+    localHistory,
+    exportsDir,
+  };
 }
 
 app.whenReady().then(() => {
@@ -424,11 +444,12 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('move-to-review', async (_event, payload = {}) => {
-    const reviewActionPath = getBundledPythonPath('review_action');
     const filePath = payload.filePath;
+    const filePaths = payload.filePaths || [];
     const mode = payload.mode || 'single';
-
-    if (!filePath) {
+    const actionTarget = mode === 'batch' ? JSON.stringify(filePaths) : filePath;
+    
+    if (mode !== 'batch' && !filePath) {
       return {
         success: false,
         message: 'No file path provided.',
@@ -438,7 +459,9 @@ app.whenReady().then(() => {
     const result = await runPythonScript(reviewActionPath, [
       '--app-data',
       getAppDataPath(),
-      filePath,
+      '--dtm-root',
+      getDtmDesktopRoot().root,
+      actionTarget,
       mode,
     ]);
 
@@ -453,30 +476,38 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('move-to-archive', async (_event, payload = {}) => {
-    const archiveActionPath = getBundledPythonPath('archive_action');
+    const actionPath = getBundledPythonPath('archive_action');
+  
     const filePath = payload.filePath;
+    const filePaths = payload.filePaths || [];
     const mode = payload.mode || 'single';
-
-    if (!filePath) {
+    const actionTarget = mode === 'batch' ? JSON.stringify(filePaths) : filePath;
+  
+    if (mode !== 'batch' && !filePath) {
       return {
         success: false,
         message: 'No file path provided.',
       };
     }
-
-    const result = await runPythonScript(archiveActionPath, [
+  
+    const result = await runPythonScript(actionPath, [
       '--app-data',
       getAppDataPath(),
-      filePath,
+      '--dtm-root',
+      getDtmDesktopRoot().root,
+      actionTarget,
       mode,
     ]);
-
+  
     try {
       return JSON.parse(result.output || '{}');
     } catch {
       return {
         success: false,
-        message: result.errorOutput || result.output || 'Failed to parse archive action result.',
+        message:
+          result.errorOutput ||
+          result.output ||
+          'Failed to parse archive action result.',
       };
     }
   });
@@ -484,7 +515,9 @@ app.whenReady().then(() => {
   ipcMain.handle('move-to-trash', async (_event, payload = {}) => {
     const trashActionPath = getBundledPythonPath('trash_action');
     const filePath = payload.filePath;
+    const filePaths = payload.filePaths || [];
     const mode = payload.mode || 'single';
+    const actionTarget = mode === 'batch' ? JSON.stringify(filePaths) : filePath;
 
     if (!filePath) {
       return {
@@ -496,7 +529,9 @@ app.whenReady().then(() => {
     const result = await runPythonScript(trashActionPath, [
       '--app-data',
       getAppDataPath(),
-      filePath,
+      '--dtm-root',
+      getDtmDesktopRoot().root,
+      actionTarget,
       mode,
     ]);
 
@@ -517,6 +552,8 @@ app.whenReady().then(() => {
     const result = await runPythonScript(historyPath, [
       '--app-data',
       getAppDataPath(),
+      '--dtm-root',
+      getDtmDesktopRoot().root,
       String(limit),
       'read',
     ]);
@@ -542,6 +579,8 @@ app.whenReady().then(() => {
     const result = await runPythonScript(restoreActionPath, [
       '--app-data',
       getAppDataPath(),
+      '--dtm-root',
+      getDtmDesktopRoot().root,
       JSON.stringify(entry),
     ]);
 
@@ -556,8 +595,10 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('clear-action-history', async () => {
-    const fs = require('fs');
-    const historyPath = path.join(app.getPath('userData'), 'action-history.json');
+    const historyPath = path.join(
+      getDtmDesktopRoot().localHistory,
+      'action-history.json'
+    );
   
     try {
       if (fs.existsSync(historyPath)) {
@@ -579,10 +620,23 @@ app.whenReady().then(() => {
   ipcMain.handle('csv-action', async (_event, payload = {}) => {
     const csvActionPath = getBundledPythonPath('csv_action');
   
+    const tempDir = path.join(getAppDataPath(), 'tmp');
+    fs.mkdirSync(tempDir, { recursive: true });
+  
+    const payloadPath = path.join(
+      tempDir,
+      `csv-action-payload-${Date.now()}.json`
+    );
+  
+    fs.writeFileSync(payloadPath, JSON.stringify(payload), 'utf-8');
+  
     const result = await runPythonScript(csvActionPath, [
       '--app-data',
       getAppDataPath(),
-      JSON.stringify(payload),
+      '--dtm-root',
+      getDtmDesktopRoot().root,
+      '--payload-file',
+      payloadPath,
     ]);
   
     try {
@@ -590,31 +644,57 @@ app.whenReady().then(() => {
     } catch {
       return {
         success: false,
-        message: result.errorOutput || result.output || 'Failed to parse CSV action result.',
+        message:
+          result.errorOutput ||
+          result.output ||
+          'Failed to parse CSV action result.',
+      };
+    } finally {
+      try {
+        if (fs.existsSync(payloadPath)) {
+          fs.unlinkSync(payloadPath);
+        }
+      } catch {
+        // ignore cleanup failure
+      }
+    }
+  });
+
+  ipcMain.handle('open-dtm-folder', async () => {
+    try {
+      const root = getDtmDesktopRoot().root;
+  
+      await shell.openPath(root);
+  
+      return {
+        success: true,
+        path: root,
+        message: `Opened DTM folder: ${root}`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.message || 'Failed to open DTM folder.',
       };
     }
   });
 
   ipcMain.handle('open-csv-export-folder', async () => {
-    const exportDir = path.join(app.getPath('desktop'), 'DTM-Exports');
+    const { exportsDir } = getDtmDesktopRoot();
   
     try {
-      if (!fs.existsSync(exportDir)) {
-        fs.mkdirSync(exportDir, { recursive: true });
-      }
-  
-      await shell.openPath(exportDir);
+      await shell.openPath(exportsDir);
   
       return {
         success: true,
-        message: `Opened export folder: ${exportDir}`,
-        path: exportDir,
+        message: `Opened export folder: ${exportsDir}`,
+        path: exportsDir,
       };
     } catch (error) {
       return {
         success: false,
         message: error.message || 'Failed to open CSV export folder.',
-        path: exportDir,
+        path: exportsDir,
       };
     }
   });
@@ -625,6 +705,8 @@ app.whenReady().then(() => {
     const result = await runPythonScript(decisionPath, [
       '--app-data',
       getAppDataPath(),
+      '--dtm-root',
+      getDtmDesktopRoot().root,
       'read',
     ]);
   
@@ -645,6 +727,8 @@ app.whenReady().then(() => {
     const result = await runPythonScript(decisionPath, [
       '--app-data',
       getAppDataPath(),
+      '--dtm-root',
+      getDtmDesktopRoot().root,
       'save',
       JSON.stringify(payload),
     ]);
@@ -665,6 +749,8 @@ app.whenReady().then(() => {
     const result = await runPythonScript(sessionPath, [
       '--app-data',
       getAppDataPath(),
+      '--dtm-root',
+      getDtmDesktopRoot().root,
       'load',
       JSON.stringify(payload),
     ]);
@@ -681,6 +767,31 @@ app.whenReady().then(() => {
       };
     }
   });
+
+  ipcMain.handle('reset-dataset-decisions', async (_event, payload = {}) => {
+    const datasetDecisionPath = getBundledPythonPath('dataset_decision');
+  
+    const result = await runPythonScript(datasetDecisionPath, [
+      '--app-data',
+      getAppDataPath(),
+      '--dtm-root',
+      getDtmDesktopRoot().root,
+      'reset_csv',
+      JSON.stringify(payload),
+    ]);
+  
+    try {
+      return JSON.parse(result.output || '{}');
+    } catch {
+      return {
+        success: false,
+        message:
+          result.errorOutput ||
+          result.output ||
+          'Failed to parse dataset reset result.',
+      };
+    }
+  });
   
   ipcMain.handle('save-csv-review-session', async (_event, payload = {}) => {
     const sessionPath = getBundledPythonPath('csv_review_session');
@@ -688,6 +799,8 @@ app.whenReady().then(() => {
     const result = await runPythonScript(sessionPath, [
       '--app-data',
       getAppDataPath(),
+      '--dtm-root',
+      getDtmDesktopRoot().root,
       'save',
       JSON.stringify(payload),
     ]);

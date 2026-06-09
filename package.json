@@ -62,6 +62,10 @@
       {
         "from": "bundled-python",
         "to": "bundled-python"
+      },
+      {
+        "from": "build/icon.png",
+        "to": "build/icon.png"
       }
     ],
     "mac": {

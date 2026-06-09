@@ -7,7 +7,12 @@ from datetime import datetime
 
 def ensure_export_dir(app_data_path):
     desktop_path = os.path.expanduser("~/Desktop")
-    export_dir = os.path.join(desktop_path, "DTM-Exports")
+    export_dir = os.path.join(
+        desktop_path,
+        "Digital Total Maintenance",
+        "Exports",
+    )
+
     os.makedirs(export_dir, exist_ok=True)
     return export_dir
 
@@ -544,11 +549,20 @@ def run_action(app_data_path, payload):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--app-data", required=True)
-    parser.add_argument("payload_json")
+    parser.add_argument("--dtm-root", required=False)
+    parser.add_argument("--payload-file", required=False)
+    parser.add_argument("payload_json", nargs="?")
     args = parser.parse_args()
 
     try:
-        payload = json.loads(args.payload_json)
+        if args.payload_file:
+            with open(args.payload_file, "r", encoding="utf-8") as file:
+                payload = json.load(file)
+        elif args.payload_json:
+            payload = json.loads(args.payload_json)
+        else:
+            raise ValueError("No CSV action payload was provided.")
+
         result = run_action(args.app_data, payload)
         print(json.dumps(result))
     except Exception as error:
@@ -556,7 +570,6 @@ def main():
             "success": False,
             "message": str(error),
         }))
-
 
 if __name__ == "__main__":
     main()
