@@ -248,6 +248,23 @@ interface ElectronAPI {
     message: string;
     removed_count?: number;
   }>;
+
+  bulkFileAction?: (payload: {
+    action: 'review' | 'archive' | 'remove';
+    paths: string[];
+    mode: 'single' | 'bulk';
+  }) => Promise<{
+    success: boolean;
+    success_count: number;
+    failure_count: number;
+    results: Array<{
+      success: boolean;
+      source_path: string;
+      destination_path?: string;
+      message?: string;
+    }>;
+    message?: string;
+  }>;
 }
 
 interface Window {

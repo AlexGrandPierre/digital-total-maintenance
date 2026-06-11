@@ -1805,27 +1805,28 @@ function App() {
     setBusyPath(null);
     setActionStatus(null);
   
-    let successCount = 0;
-    let failureCount = 0;
-  
-    for (let index = 0; index < files.length; index += 1) {
-      const file = files[index];
-  
+    try {
       setBulkProgress({
         action: actionType,
-        current: index + 1,
+        current: 1,
         total: files.length,
-        currentFileName: file.name,
+        currentFileName: `Processing ${files.length} files...`,
       });
   
-      try {
-        const result = await performQueueAction(actionType, file.path, {
-          rescanAfterSuccess: false,
-          mode: 'bulk',
-        });
+      const result = await window.electronAPI?.bulkFileAction?.({
+        action: actionType,
+        paths: files.map((file) => file.path),
+        mode: 'bulk',
+      });
   
-        if (result.success) {
-          successCount += 1;
+      const successCount = result?.success_count ?? 0;
+      const failureCount = result?.failure_count ?? files.length;
+  
+      if (Array.isArray(result?.results)) {
+        for (const item of result.results) {
+          if (!item.success) continue;
+  
+          removePathFromQueues(item.source_path);
   
           dispatchSession({
             type: 'FILE_ACTION_SUCCEEDED',
@@ -1836,36 +1837,38 @@ function App() {
                 : actionType === 'remove'
                 ? 'remove'
                 : 'keep',
-            filePath: file.path,
+            filePath: item.source_path,
           });
-        } else {
-          failureCount += 1;
         }
-      } catch {
-        failureCount += 1;
       }
-    }
   
-    setBulkProgress(null);
-    setIsBulkActing(false);
+      await loadActionHistory();
   
-    const actionLabel =
-      actionType === 'review'
-        ? 'sent to review'
-        : actionType === 'archive'
-        ? 'archived'
-        : 'moved to Trash';
+      const actionLabel =
+        actionType === 'review'
+          ? 'sent to review'
+          : actionType === 'archive'
+          ? 'archived'
+          : 'moved to Trash';
   
-    if (failureCount === 0) {
       setActionStatus({
-        tone: 'success',
-        message: `Action complete: ${successCount} visible file${successCount === 1 ? '' : 's'} ${actionLabel}. Refresh when ready to reconcile.`,
+        tone: failureCount === 0 ? 'success' : 'error',
+        message:
+          failureCount === 0
+            ? `Action complete: ${successCount} visible file${successCount === 1 ? '' : 's'} ${actionLabel}. Refresh when ready to reconcile.`
+            : `Bulk action finished with partial success: ${successCount} succeeded, ${failureCount} failed.`,
       });
-    } else {
+    } catch (error) {
       setActionStatus({
         tone: 'error',
-        message: `Bulk action finished with partial success: ${successCount} succeeded, ${failureCount} failed.`,
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Unexpected bulk action failure.',
       });
+    } finally {
+      setBulkProgress(null);
+      setIsBulkActing(false);
     }
   };
 
@@ -2305,15 +2308,6 @@ function App() {
             : 'Unexpected failure opening CSV export folder.',
       });
     }
-  };
-
-  const handleOpenDtmFolder = async () => {
-    const result = await window.electronAPI?.openDtmFolder?.();
-  
-    setActionStatus({
-      tone: result?.success ? 'success' : 'error',
-      message: result?.message ?? 'Failed to open DTM folder.',
-    });
   };
 
   const filteredDuplicateGroups = useMemo(() => {

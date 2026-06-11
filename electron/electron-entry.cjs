@@ -818,6 +818,49 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('bulk-file-action', async (_event, payload = {}) => {
+    const batchActionPath = getBundledPythonPath('batch_action');
+  
+    const tempDir = path.join(getAppDataPath(), 'tmp');
+    fs.mkdirSync(tempDir, { recursive: true });
+  
+    const payloadPath = path.join(
+      tempDir,
+      `batch-action-payload-${Date.now()}.json`
+    );
+  
+    fs.writeFileSync(payloadPath, JSON.stringify(payload), 'utf-8');
+  
+    const result = await runPythonScript(batchActionPath, [
+      '--app-data',
+      getAppDataPath(),
+      '--dtm-root',
+      getDtmDesktopRoot().root,
+      '--payload-file',
+      payloadPath,
+    ]);
+  
+    try {
+      return JSON.parse(result.output || '{}');
+    } catch {
+      return {
+        success: false,
+        message:
+          result.errorOutput ||
+          result.output ||
+          'Failed to parse batch action result.',
+      };
+    } finally {
+      try {
+        if (fs.existsSync(payloadPath)) {
+          fs.unlinkSync(payloadPath);
+        }
+      } catch {
+        // ignore cleanup failure
+      }
+    }
+  });
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

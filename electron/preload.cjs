@@ -46,4 +46,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   resetDatasetDecisions: (payload) =>
     ipcRenderer.invoke('reset-dataset-decisions', payload),
+
+  bulkFileAction: (payload) => ipcRenderer.invoke('bulk-file-action', payload),
 });
