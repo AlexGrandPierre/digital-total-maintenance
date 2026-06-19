@@ -4011,9 +4011,9 @@ function App() {
                                   );
                                   setDuplicateReviewCapacity(25);
                                 }}
-                                className="rounded-full border border-amber-200 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 outline-none transition hover:bg-amber-50"
+                                className="h-8 w-24 rounded-full border border-amber-200 bg-white px-2 text-xs font-semibold text-amber-900 outline-none transition hover:bg-amber-50"
                               >
-                                <option value="all">All Priorities</option>
+                                <option value="all">Filter</option>
                                 <option value="critical">Critical Priority</option>
                                 <option value="high">High Priority</option>
                                 <option value="medium">Medium Priority</option>
@@ -4356,9 +4356,9 @@ function App() {
                                   );
                                   setSuspiciousReviewCapacity(25);
                                 }}
-                                className="rounded-full border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-900 outline-none transition hover:bg-rose-50"
+                                className="h-8 w-24 rounded-full border border-rose-200 bg-white px-2 text-xs font-semibold text-rose-900 outline-none transition hover:bg-rose-50"
                               >
-                                <option value="all">All Severities</option>
+                                <option value="all">Filter</option>
                                 <option value="critical">Critical Severity</option>
                                 <option value="high">High Severity</option>
                                 <option value="medium">Medium Severity</option>
