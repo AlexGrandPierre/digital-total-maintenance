@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useState } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import Header from './components/Header';
 import ScanButton from './components/ScanButton';
 import InfoPanel from './components/InfoPanel';
@@ -663,6 +663,9 @@ function App() {
 
   const [busyHistoryId, setBusyHistoryId] = useState<string | null>(null);
 
+  const [selectedHistoryIds, setSelectedHistoryIds] = useState<Set<string>>(new Set());
+  const [isBulkRestoring, setIsBulkRestoring] = useState(false);
+
   const [historyFilter, setHistoryFilter] = useState<'undoable' | 'all' | 'restored'>('undoable');
 
   const [duplicatePrimarySelections, setDuplicatePrimarySelections] = useState<Record<string, string>>({});
@@ -675,6 +678,10 @@ function App() {
   const [csvData, setCsvData] = useState<CsvScanResult | null>(null);
 
   const [, setLastCsvExportPath] = useState<string | null>(null);
+
+  const [showDuplicateBulkMenu, setShowDuplicateBulkMenu] = useState(false);
+
+  const [showSuspiciousBulkMenu, setShowSuspiciousBulkMenu] = useState(false);
 
   const [reviewQueueFilter, setReviewQueueFilter] = useState<
     'all' | 'high' | 'medium' | 'low'
@@ -690,8 +697,12 @@ function App() {
   >('pending');
 
   const [suspiciousDecisionFilter, setSuspiciousDecisionFilter] = useState<
-  'all' | 'pending' | 'valid_data' | 'corrupted' | 'needs_review' | 'ignored'
->('pending');
+    'all' | 'pending' | 'valid_data' | 'corrupted' | 'needs_review' | 'ignored'
+  >('pending');
+
+  const [suspiciousSeverityFilter, setSuspiciousSeverityFilter] = useState<
+    'all' | 'critical' | 'high' | 'medium' | 'low'
+  >('all');
 
   const [batchPreview, setBatchPreview] = useState<{
     filter: Exclude<QueueFilter, null>;
@@ -719,6 +730,10 @@ function App() {
   const [suspiciousReviewCapacity, setSuspiciousReviewCapacity] =
     useState<ReviewCapacity>(25);
 
+  const [duplicatePriorityFilter, setDuplicatePriorityFilter] = useState<
+    'all' | 'critical' | 'high' | 'medium' | 'low'
+  >('all');
+
   const openBatchPreview = (preview: Exclude<BatchPreview, null>) => {
     setBatchPreview(preview);
     setSelectedBatchPaths(new Set(preview.items.map((item) => item.path)));
@@ -736,6 +751,37 @@ function App() {
       .sort()
       .join('|');
   };
+
+  const duplicateActionMenuRef = useRef<HTMLDivElement | null>(null);
+  const suspiciousActionMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+  
+      if (
+        duplicateActionMenuRef.current &&
+        !duplicateActionMenuRef.current.contains(target)
+      ) {
+        setShowDuplicateExportMenu(false);
+        setShowDuplicateBulkMenu(false);
+      }
+  
+      if (
+        suspiciousActionMenuRef.current &&
+        !suspiciousActionMenuRef.current.contains(target)
+      ) {
+        setShowSuspiciousExportMenu(false);
+        setShowSuspiciousBulkMenu(false);
+      }
+    };
+  
+    document.addEventListener('mousedown', handleClickOutside);
+  
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   useEffect(() => {
     const unsubscribeFinished = window.electronAPI?.onScanFinished?.((data: { output?: string }) => {
@@ -1568,6 +1614,67 @@ function App() {
     }
   };
 
+  const toggleSelectedHistoryId = (entryId: string) => {
+    setSelectedHistoryIds((prev) => {
+      const next = new Set(prev);
+  
+      if (next.has(entryId)) {
+        next.delete(entryId);
+      } else {
+        next.add(entryId);
+      }
+  
+      return next;
+    });
+  };
+  
+  const selectedUndoableHistoryEntries = filteredActionHistory.filter(
+    (entry) => selectedHistoryIds.has(entry.id) && canUndoHistoryEntry(entry)
+  );
+  
+  const handleBulkRestoreSelected = async () => {
+    if (selectedUndoableHistoryEntries.length === 0 || isBulkRestoring) {
+      return;
+    }
+  
+    setIsBulkRestoring(true);
+    setActionStatus(null);
+  
+    try {
+      const result = await window.electronAPI?.bulkRestoreFromHistory?.({
+        entries: selectedUndoableHistoryEntries,
+        mode: 'bulk',
+      });
+  
+      if (result?.success || result?.partial_success) {
+        await loadActionHistory();
+        setSelectedHistoryIds(new Set());
+  
+        setActionStatus({
+          tone: result.failure_count === 0 ? 'success' : 'error',
+          message:
+            result.message ||
+            `Restored ${result.success_count ?? 0} selected item(s).`,
+        });
+      } else {
+        setActionStatus({
+          tone: 'error',
+          message: result?.message || 'Bulk restore failed.',
+        });
+      }
+    } catch (error) {
+      setActionStatus({
+        tone: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Unexpected bulk restore failure.',
+      });
+    } finally {
+      setIsBulkRestoring(false);
+    }
+  };
+
   const insights = useMemo(() => {
     if (!scanData) return null;
   
@@ -2319,6 +2426,12 @@ function App() {
         : reviewQueueFilter === 'low'
         ? csvData?.duplicate_group_samples?.low_priority ?? []
         : csvData?.duplicate_groups ?? [];
+    
+    if (duplicatePriorityFilter !== 'all') {
+      groups = groups.filter(
+        (group) => group.priority_label === duplicatePriorityFilter
+      );
+    }
   
     if (decisionFilter !== 'all') {
       groups = groups.filter((group) => {
@@ -2328,22 +2441,42 @@ function App() {
     }
   
     return groups;
-  }, [csvData, reviewQueueFilter, decisionFilter, datasetDecisions]);
+  }, [csvData, reviewQueueFilter, duplicatePriorityFilter, decisionFilter, datasetDecisions]);
 
   const filteredSuspiciousExamples = useMemo(() => {
     const examples = csvData?.suspicious_value_summary?.examples ?? [];
   
-    if (suspiciousDecisionFilter === 'all') {
-      return examples;
+    let sortedExamples = [...examples].sort((a, b) => {
+      const scoreA = a.severity_score ?? 0;
+      const scoreB = b.severity_score ?? 0;
+  
+      if (scoreA !== scoreB) return scoreB - scoreA;
+  
+      return (b.issues?.length ?? 0) - (a.issues?.length ?? 0);
+    });
+  
+    if (suspiciousSeverityFilter !== 'all') {
+      sortedExamples = sortedExamples.filter(
+        (example) => example.severity_label === suspiciousSeverityFilter
+      );
     }
   
-    return examples.filter((example) => {
+    if (suspiciousDecisionFilter === 'all') {
+      return sortedExamples;
+    }
+  
+    return sortedExamples.filter((example) => {
       const issueId = getSuspiciousIssueId(example);
       const decision = suspiciousDecisions[issueId]?.decision || 'pending';
   
       return decision === suspiciousDecisionFilter;
     });
-  }, [csvData, suspiciousDecisionFilter, suspiciousDecisions]);
+  }, [
+    csvData,
+    suspiciousSeverityFilter,
+    suspiciousDecisionFilter,
+    suspiciousDecisions,
+  ]);
 
   const visibleDuplicateGroupsForReview = useMemo(() => {
     return applyReviewCapacity(filteredDuplicateGroups, duplicateReviewCapacity);
@@ -2534,6 +2667,32 @@ function App() {
                       </button>
                     </div>
 
+                    {historyFilter === 'undoable' && filteredActionHistory.length > 0 ? (
+                      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                        <div className="text-sm text-slate-700">
+                          Selected{' '}
+                          <span className="font-semibold">{selectedUndoableHistoryEntries.length}</span>{' '}
+                          undoable action
+                          {selectedUndoableHistoryEntries.length === 1 ? '' : 's'}
+                        </div>
+
+                        <button
+                          onClick={handleBulkRestoreSelected}
+                          disabled={
+                            selectedUndoableHistoryEntries.length === 0 ||
+                            isBulkRestoring ||
+                            isBulkActing ||
+                            isScanning
+                          }
+                          className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                        >
+                          {isBulkRestoring
+                            ? 'Restoring…'
+                            : `Undo Selected (${selectedUndoableHistoryEntries.length})`}
+                        </button>
+                      </div>
+                    ) : null}
+
                     <div className="mb-3 text-xs text-slate-500">
                       Showing {filteredActionHistory.length} item{filteredActionHistory.length === 1 ? '' : 's'}
                       {historyFilter === 'undoable'
@@ -2574,6 +2733,27 @@ function App() {
                               key={entry.id}
                               className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4"
                             >
+                              {canUndoHistoryEntry(entry) ? (
+                                <label className="mb-3 flex items-center gap-2 text-xs font-medium text-slate-600">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedHistoryIds.has(entry.id)}
+                                    onChange={() => toggleSelectedHistoryId(entry.id)}
+                                    disabled={isBulkRestoring || isBulkActing || isScanning}
+                                  />
+                                  Select for undo
+                                </label>
+                              ) : null}
+                          
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="text-sm font-semibold text-slate-900">
+                                  {actionLabel}
+                                </div>
+                                <div className="text-xs text-slate-500">
+                                  {new Date(entry.timestamp).toLocaleString()}
+                                </div>
+                              </div>
+
                               <div className="flex flex-wrap items-center justify-between gap-2">
                                 <div className="text-sm font-semibold text-slate-900">
                                   {actionLabel}
@@ -3718,51 +3898,128 @@ function App() {
                           </div>
                         </div>
 
-                        <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-                          <div className="relative">
-                            <button
-                              onClick={() => {
-                                setShowDuplicateExportMenu((value) => !value);
-                                setShowSuspiciousExportMenu(false);
-                              }}
-                              className="rounded-full bg-amber-900 px-3 py-1.5 text-xs font-semibold text-white"
-                            >
-                              Export ▼
-                            </button>
+                        <div
+                          ref={duplicateActionMenuRef}
+                          className="mt-2 flex flex-wrap items-center justify-between gap-3"
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="relative">
+                              <button
+                                onClick={() => {
+                                  setShowDuplicateExportMenu((value) => !value);
+                                  setShowSuspiciousExportMenu(false);
+                                }}
+                                className="rounded-full bg-amber-900 px-3 py-1.5 text-xs font-semibold text-white"
+                              >
+                                Export ▼
+                              </button>
 
-                            {showDuplicateExportMenu ? (
-                              <div className="absolute left-0 z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white shadow-lg">
-                                <button
-                                  onClick={() => {
-                                    handleCsvAction('export_duplicate_groups');
-                                    setShowDuplicateExportMenu(false);
-                                  }}
-                                  className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
-                                >
-                                  All duplicate rows
-                                </button>
+                              {showDuplicateExportMenu ? (
+                                <div className="absolute left-0 z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white shadow-lg">
+                                  <button
+                                    onClick={() => {
+                                      handleCsvAction('export_duplicate_groups');
+                                      setShowDuplicateExportMenu(false);
+                                    }}
+                                    className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
+                                  >
+                                    All duplicate rows
+                                  </button>
 
-                                <button
-                                  onClick={() => {
-                                    handleCsvAction('export_approved_duplicates');
-                                    setShowDuplicateExportMenu(false);
-                                  }}
-                                  className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
-                                >
-                                  Approved duplicates
-                                </button>
+                                  <button
+                                    onClick={() => {
+                                      handleCsvAction('export_approved_duplicates');
+                                      setShowDuplicateExportMenu(false);
+                                    }}
+                                    className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
+                                  >
+                                    Approved duplicates
+                                  </button>
 
-                                <button
-                                  onClick={() => {
-                                    handleCsvAction('export_duplicate_needs_review');
-                                    setShowDuplicateExportMenu(false);
-                                  }}
-                                  className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
-                                >
-                                  Needs-review duplicates
-                                </button>
-                              </div>
-                            ) : null}
+                                  <button
+                                    onClick={() => {
+                                      handleCsvAction('export_duplicate_needs_review');
+                                      setShowDuplicateExportMenu(false);
+                                    }}
+                                    className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
+                                  >
+                                    Needs-review duplicates
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
+
+                            <div className="relative">
+                              <button
+                                onClick={() => setShowDuplicateBulkMenu((value) => !value)}
+                                className="rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white"
+                              >
+                                Bulk Action ▼
+                              </button>
+
+                              {showDuplicateBulkMenu ? (
+                                <div className="absolute left-0 z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white shadow-lg">
+                                  <button
+                                    onClick={() => {
+                                      handleBulkDatasetDecision('approved_duplicate');
+                                      setShowDuplicateBulkMenu(false);
+                                    }}
+                                    className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
+                                  >
+                                    Approve Visible
+                                  </button>
+
+                                  <button
+                                    onClick={() => {
+                                      handleBulkDatasetDecision('legitimate_records');
+                                      setShowDuplicateBulkMenu(false);
+                                    }}
+                                    className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
+                                  >
+                                    Legitimate Visible
+                                  </button>
+
+                                  <button
+                                    onClick={() => {
+                                      handleBulkDatasetDecision('needs_review');
+                                      setShowDuplicateBulkMenu(false);
+                                    }}
+                                    className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
+                                  >
+                                    Needs Review Visible
+                                  </button>
+
+                                  <button
+                                    onClick={() => {
+                                      handleBulkDatasetDecision('ignored');
+                                      setShowDuplicateBulkMenu(false);
+                                    }}
+                                    className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
+                                  >
+                                    Ignore Visible
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
+
+                            <div className="relative">
+                              <select
+                                value={duplicatePriorityFilter}
+                                onChange={(event) => {
+                                  setDuplicatePriorityFilter(
+                                    event.target.value as 'all' | 'critical' | 'high' | 'medium' | 'low'
+                                  );
+                                  setDuplicateReviewCapacity(25);
+                                }}
+                                className="rounded-full border border-amber-200 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 outline-none transition hover:bg-amber-50"
+                              >
+                                <option value="all">All Priorities</option>
+                                <option value="critical">Critical Priority</option>
+                                <option value="high">High Priority</option>
+                                <option value="medium">Medium Priority</option>
+                                <option value="low">Low Priority</option>
+                              </select>
+                            </div>
                           </div>
 
                           <ReviewCapacityControl
@@ -3806,36 +4063,6 @@ function App() {
                               {label}
                             </button>
                           ))}
-                        </div>
-
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <button
-                            onClick={() => handleBulkDatasetDecision('approved_duplicate')}
-                            className="rounded-full bg-emerald-900 px-3 py-1.5 text-xs font-semibold text-white"
-                          >
-                            Approve Visible
-                          </button>
-
-                          <button
-                            onClick={() => handleBulkDatasetDecision('legitimate_records')}
-                            className="rounded-full bg-sky-900 px-3 py-1.5 text-xs font-semibold text-white"
-                          >
-                            Legitimate Visible
-                          </button>
-
-                          <button
-                            onClick={() => handleBulkDatasetDecision('needs_review')}
-                            className="rounded-full bg-amber-900 px-3 py-1.5 text-xs font-semibold text-white"
-                          >
-                            Needs Review Visible
-                          </button>
-
-                          <button
-                            onClick={() => handleBulkDatasetDecision('ignored')}
-                            className="rounded-full bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white"
-                          >
-                            Ignore Visible
-                          </button>
                         </div>
 
                         <div className="mt-4 grid grid-cols-3 gap-3">
@@ -3909,12 +4136,23 @@ function App() {
                               >
                                 <div className="flex items-start justify-between gap-3">
                                   <div>
-                                    <div className="text-sm font-semibold text-slate-900">
-                                      Duplicate Group {index + 1}
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <div className="text-sm font-semibold text-slate-900">
+                                        Duplicate Group {index + 1}
+                                      </div>
+
+                                      {group.priority_label ? (
+                                        <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-800 ring-1 ring-amber-200">
+                                          {group.priority_label} priority
+                                        </span>
+                                      ) : null}
                                     </div>
 
                                     <div className="mt-1 text-xs text-slate-500">
                                       {group.rows_total} rows · confidence: {group.confidence}
+                                      {typeof group.priority_score === 'number'
+                                        ? ` · score: ${group.priority_score}`
+                                        : ''}
                                     </div>
                                   </div>
 
@@ -3940,6 +4178,12 @@ function App() {
                                     );
                                   })()}
                                 </div>
+
+                                {group.priority_reason ? (
+                                  <div className="mt-3 rounded-xl bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800 ring-1 ring-blue-100">
+                                    {group.priority_reason}
+                                  </div>
+                                ) : null}
 
                                 <p className="mt-3 text-sm leading-6 text-slate-600">
                                   {group.reason}
@@ -4045,51 +4289,82 @@ function App() {
                           </h4>
                         </div>
 
-                        <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-                          <div className="relative">
-                            <button
-                              onClick={() => {
-                                setShowSuspiciousExportMenu((value) => !value);
-                                setShowDuplicateExportMenu(false);
-                              }}
-                              className="rounded-full bg-rose-900 px-3 py-1.5 text-xs font-semibold text-white"
-                            >
-                              Export ▼
-                            </button>
+                        <div
+                          ref={suspiciousActionMenuRef}
+                          className="mt-2 flex flex-wrap items-center justify-between gap-3"
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="relative">
+                              <button
+                                onClick={() => {
+                                  setShowSuspiciousExportMenu((value) => !value);
+                                  setShowDuplicateExportMenu(false);
+                                  setShowDuplicateBulkMenu(false);
+                                }}
+                                className="rounded-full bg-rose-900 px-3 py-1.5 text-xs font-semibold text-white"
+                              >
+                                Export ▼
+                              </button>
 
-                            {showSuspiciousExportMenu ? (
-                              <div className="absolute left-0 z-20 mt-2 w-64 rounded-xl border border-slate-200 bg-white shadow-lg">
-                                <button
-                                  onClick={() => {
-                                    handleCsvAction('export_suspicious_rows');
-                                    setShowSuspiciousExportMenu(false);
-                                  }}
-                                  className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
-                                >
-                                  All suspicious rows
-                                </button>
+                              {showSuspiciousExportMenu ? (
+                                <div className="absolute left-0 z-20 mt-2 w-64 rounded-xl border border-slate-200 bg-white shadow-lg">
+                                  <button onClick={() => { handleCsvAction('export_suspicious_rows'); setShowSuspiciousExportMenu(false); }} className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50">
+                                    All suspicious rows
+                                  </button>
+                                  <button onClick={() => { handleCsvAction('export_corrupted_suspicious_rows'); setShowSuspiciousExportMenu(false); }} className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50">
+                                    Corrupted suspicious rows
+                                  </button>
+                                  <button onClick={() => { handleCsvAction('export_suspicious_needs_review'); setShowSuspiciousExportMenu(false); }} className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50">
+                                    Needs-review suspicious rows
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
 
-                                <button
-                                  onClick={() => {
-                                    handleCsvAction('export_corrupted_suspicious_rows');
-                                    setShowSuspiciousExportMenu(false);
-                                  }}
-                                  className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
-                                >
-                                  Corrupted suspicious rows
-                                </button>
+                            <div className="relative">
+                              <button
+                                onClick={() => setShowSuspiciousBulkMenu((value) => !value)}
+                                className="rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white"
+                              >
+                                Bulk Action ▼
+                              </button>
 
-                                <button
-                                  onClick={() => {
-                                    handleCsvAction('export_suspicious_needs_review');
-                                    setShowSuspiciousExportMenu(false);
-                                  }}
-                                  className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
-                                >
-                                  Needs-review suspicious rows
-                                </button>
-                              </div>
-                            ) : null}
+                              {showSuspiciousBulkMenu ? (
+                                <div className="absolute left-0 z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white shadow-lg">
+                                  <button onClick={() => { handleBulkSuspiciousDecision('valid_data'); setShowSuspiciousBulkMenu(false); }} className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50">
+                                    Valid Visible
+                                  </button>
+                                  <button onClick={() => { handleBulkSuspiciousDecision('corrupted'); setShowSuspiciousBulkMenu(false); }} className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50">
+                                    Corrupted Visible
+                                  </button>
+                                  <button onClick={() => { handleBulkSuspiciousDecision('needs_review'); setShowSuspiciousBulkMenu(false); }} className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50">
+                                    Needs Review Visible
+                                  </button>
+                                  <button onClick={() => { handleBulkSuspiciousDecision('ignored'); setShowSuspiciousBulkMenu(false); }} className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50">
+                                    Ignore Visible
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
+
+                            <div className="relative">
+                              <select
+                                value={suspiciousSeverityFilter}
+                                onChange={(event) => {
+                                  setSuspiciousSeverityFilter(
+                                    event.target.value as 'all' | 'critical' | 'high' | 'medium' | 'low'
+                                  );
+                                  setSuspiciousReviewCapacity(25);
+                                }}
+                                className="rounded-full border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-900 outline-none transition hover:bg-rose-50"
+                              >
+                                <option value="all">All Severities</option>
+                                <option value="critical">Critical Severity</option>
+                                <option value="high">High Severity</option>
+                                <option value="medium">Medium Severity</option>
+                                <option value="low">Low Severity</option>
+                              </select>
+                            </div>
                           </div>
 
                           <ReviewCapacityControl
@@ -4134,36 +4409,6 @@ function App() {
                               {label}
                             </button>
                           ))}
-                        </div>
-
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <button
-                            onClick={() => handleBulkSuspiciousDecision('valid_data')}
-                            className="rounded-full bg-emerald-900 px-3 py-1.5 text-xs font-semibold text-white"
-                          >
-                            Valid Visible
-                          </button>
-
-                          <button
-                            onClick={() => handleBulkSuspiciousDecision('corrupted')}
-                            className="rounded-full bg-rose-900 px-3 py-1.5 text-xs font-semibold text-white"
-                          >
-                            Corrupted Visible
-                          </button>
-
-                          <button
-                            onClick={() => handleBulkSuspiciousDecision('needs_review')}
-                            className="rounded-full bg-amber-900 px-3 py-1.5 text-xs font-semibold text-white"
-                          >
-                            Needs Review Visible
-                          </button>
-
-                          <button
-                            onClick={() => handleBulkSuspiciousDecision('ignored')}
-                            className="rounded-full bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white"
-                          >
-                            Ignore Visible
-                          </button>
                         </div>
 
                         <div className="mt-4 grid grid-cols-3 gap-3">
@@ -4233,9 +4478,15 @@ function App() {
                                     </div>
                                   </div>
 
-                                  <span className="rounded-full bg-rose-100 px-2.5 py-1 text-[11px] font-medium text-rose-800 ring-1 ring-rose-200">
-                                    review
-                                  </span>
+                                  {example.severity_label ? (
+                                    <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-rose-800 ring-1 ring-rose-200">
+                                      {example.severity_label} severity
+                                    </span>
+                                  ) : (
+                                    <span className="rounded-full bg-rose-100 px-2.5 py-1 text-[11px] font-medium text-rose-800 ring-1 ring-rose-200">
+                                      review
+                                    </span>
+                                  )}
                                 </div>
 
                                 {(() => {
@@ -4259,6 +4510,12 @@ function App() {
                                       {savedDecision.replace(/_/g, ' ')}
                                     </span>
                                   );
+
+                                  {example.severity_reason ? (
+                                    <div className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-800 ring-1 ring-rose-100">
+                                      {example.severity_reason}
+                                    </div>
+                                  ) : null}
                                 })()}
 
                                 <div className="mt-4 flex flex-wrap gap-2">

@@ -50,6 +50,9 @@ export type DuplicateGroupItem = {
   age_days: number;
   category: string;
   confidence: 'high' | 'medium' | 'low';
+  priority_score?: number;
+  priority_label?: 'critical' | 'high' | 'medium' | 'low';
+  priority_reason?: string;
   recommended_action: 'keep' | 'ignore' | 'review' | 'archive' | 'remove';
   reason: string;
   ui_visibility: 'normal' | 'hidden_by_default';
@@ -176,6 +179,11 @@ export type CsvSuspiciousValueExample = {
   column: string;
   value: string;
   issues: string[];
+
+  severity_score?: number;
+  severity_label?: 'critical' | 'high' | 'medium' | 'low';
+  severity_reason?: string;
+  row_missing_count?: number;
 };
 
 export type CsvSuspiciousValueSummary = {
@@ -194,6 +202,11 @@ export type CsvDuplicateGroupRow = {
 export type CsvDuplicateGroup = {
   group_id: string;
   confidence: 'high' | 'medium';
+
+  priority_score?: number;
+  priority_label?: 'critical' | 'high' | 'medium' | 'low';
+  priority_reason?: string;
+
   reason: string;
   matching_columns: string[];
   varying_id_columns: string[];

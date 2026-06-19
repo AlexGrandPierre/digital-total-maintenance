@@ -861,6 +861,49 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('bulk-restore-from-history', async (_event, payload = {}) => {
+    const batchRestorePath = getBundledPythonPath('batch_restore');
+  
+    const tempDir = path.join(getAppDataPath(), 'tmp');
+    fs.mkdirSync(tempDir, { recursive: true });
+  
+    const payloadPath = path.join(
+      tempDir,
+      `batch-restore-payload-${Date.now()}.json`
+    );
+  
+    fs.writeFileSync(payloadPath, JSON.stringify(payload), 'utf-8');
+  
+    const result = await runPythonScript(batchRestorePath, [
+      '--app-data',
+      getAppDataPath(),
+      '--dtm-root',
+      getDtmDesktopRoot().root,
+      '--payload-file',
+      payloadPath,
+    ]);
+  
+    try {
+      return JSON.parse(result.output || '{}');
+    } catch {
+      return {
+        success: false,
+        message:
+          result.errorOutput ||
+          result.output ||
+          'Failed to parse batch restore result.',
+      };
+    } finally {
+      try {
+        if (fs.existsSync(payloadPath)) {
+          fs.unlinkSync(payloadPath);
+        }
+      } catch {
+        // ignore cleanup failure
+      }
+    }
+  });
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

@@ -121,6 +121,71 @@ def make_group_id(values):
     raw = "|".join(values)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
+def normalize_identity_column_role(column):
+    normalized = normalize_column_name(column)
+
+    if normalized in {"first name", "firstname", "given name", "legal first name"}:
+        return "given_name"
+
+    if normalized in {"last name", "lastname", "surname", "family name", "legal last name"}:
+        return "family_name"
+
+    if normalized in {"date of birth", "dob", "birth date", "birthdate"}:
+        return "date_of_birth"
+
+    if normalized in {"gender", "sex"}:
+        return "gender"
+
+    if normalized in {"gmsregistrationnumber", "gms registration number", "gms registration no"}:
+        return "gms_registration_number"
+
+    return None
+
+
+def get_duplicate_priority(group, duplicate_key_columns):
+    roles = {
+        normalize_identity_column_role(column)
+        for column in duplicate_key_columns
+    }
+    roles.discard(None)
+
+    strict_roles = {"given_name", "family_name", "date_of_birth", "gender"}
+    matched_strict_count = len(roles.intersection(strict_roles))
+
+    has_gms_signal = False
+    for column, values in group.get("varying_id_values", {}).items():
+        if normalize_identity_column_role(column) == "gms_registration_number":
+            non_empty_values = {value for value in values if value}
+            if non_empty_values:
+                has_gms_signal = True
+
+    if matched_strict_count >= 4:
+        return {
+            "priority_score": 100 if has_gms_signal else 95,
+            "priority_label": "critical",
+            "priority_reason": "Rows match across the strict identity fields: given name, family name, date of birth, and gender.",
+        }
+
+    if matched_strict_count == 3:
+        return {
+            "priority_score": 80 if has_gms_signal else 75,
+            "priority_label": "high",
+            "priority_reason": "Rows match across three strong identity fields.",
+        }
+
+    if matched_strict_count == 2:
+        return {
+            "priority_score": 55 if has_gms_signal else 50,
+            "priority_label": "medium",
+            "priority_reason": "Rows match across two identity fields and should be reviewed with caution.",
+        }
+
+    return {
+        "priority_score": 25,
+        "priority_label": "low",
+        "priority_reason": "Rows share a weaker duplicate signal and should be treated as low-priority review material.",
+    }
+
 
 def parse_date(value):
     value = str(value).strip()
@@ -730,11 +795,38 @@ def scan_csv(csv_path):
                             suspicious_by_issue[issue] += 1
 
                         if len(suspicious_examples) < SUSPICIOUS_EXAMPLE_LIMIT:
+                            row_missing_count = sum(
+                                1 for column_name in columns
+                                if normalized_row.get(column_name, "") == ""
+                            )
+
+                            severity_score = min(100, (len(issues) * 30) + min(row_missing_count * 5, 40))
+
+                            if severity_score >= 80:
+                                severity_label = "critical"
+                            elif severity_score >= 60:
+                                severity_label = "high"
+                            elif severity_score >= 35:
+                                severity_label = "medium"
+                            else:
+                                severity_label = "low"
+
+                            severity_reason = (
+                                f"This cell has {len(issues)} suspicious signal"
+                                f"{'' if len(issues) == 1 else 's'}"
+                                f" and appears in a row with {row_missing_count} missing field"
+                                f"{'' if row_missing_count == 1 else 's'}."
+                            )
+
                             suspicious_examples.append({
                                 "row_number": row_count,
                                 "column": column,
                                 "value": value,
                                 "issues": issues,
+                                "severity_score": severity_score,
+                                "severity_label": severity_label,
+                                "severity_reason": severity_reason,
+                                "row_missing_count": row_missing_count,
                             })
 
                 if row_count % 1000 == 0:
@@ -789,12 +881,17 @@ def scan_csv(csv_path):
                 f"{len(duplicate_key_columns)} duplicate-check column(s)."
             )
 
+            priority = get_duplicate_priority(group, duplicate_key_columns)
+
             if varying_id_columns:
                 reason += " One or more ID-like fields differ."
 
             duplicate_groups_all.append({
                 "group_id": f"csv-{make_group_id(list(key_values))}",
                 "confidence": confidence,
+                "priority_score": priority["priority_score"],
+                "priority_label": priority["priority_label"],
+                "priority_reason": priority["priority_reason"],
                 "reason": reason,
                 "matching_columns": duplicate_key_columns,
                 "varying_id_columns": varying_id_columns,
@@ -805,7 +902,11 @@ def scan_csv(csv_path):
             })
 
         duplicate_groups_all.sort(
-            key=lambda group: (group["rows_total"], group["confidence"] == "high"),
+            key=lambda group: (
+                group.get("priority_score", 0),
+                group["rows_total"],
+                group["confidence"] == "high",
+            ),
             reverse=True,
         )
 

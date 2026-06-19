@@ -265,6 +265,31 @@ interface ElectronAPI {
     }>;
     message?: string;
   }>;
+
+  bulkRestoreFromHistory?: (payload: {
+    entries: ActionHistoryEntry[];
+    mode: 'bulk';
+  }) => Promise<{
+    success: boolean;
+    partial_success?: boolean;
+    message: string;
+    action: 'batch_restore';
+    mode: 'bulk';
+    total: number;
+    success_count: number;
+    failure_count: number;
+    results: Array<{
+      success: boolean;
+      message: string;
+      action: string;
+      path?: string;
+      source_path?: string;
+      destination?: string;
+      destination_path?: string;
+      restored_from_history_id?: string;
+      history_entry?: ActionHistoryEntry;
+    }>;
+  }>;
 }
 
 interface Window {
