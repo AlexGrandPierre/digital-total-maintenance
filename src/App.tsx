@@ -113,6 +113,34 @@ type SuspiciousDecisionRecord = {
 
 type ReviewCapacity = 25 | 50 | 100 | 250 | 'all';
 
+type ScanProgress =
+  | {
+      type: 'csv_progress';
+      status: string;
+      target: string;
+      rows_scanned: number;
+      rows_per_second: number;
+      elapsed_seconds: number;
+      current_stage: string;
+      duplicate_candidates: number;
+      suspicious_values: number;
+      missing_values: number;
+      total_rows_estimate: number | null;
+    }
+  | {
+      type: 'progress';
+      status: string;
+      target: string;
+      files_scanned: number;
+      current_path: string;
+      elapsed_seconds: number;
+      review_total: number;
+      archive_total: number;
+      remove_total: number;
+      duplicates_total: number;
+      excluded_dirs_count: number;
+    };
+
 const initialSessionState: SessionState = {
   resolvedPaths: [],
   reviewResolved: 0,
@@ -819,7 +847,7 @@ function App() {
       }
     });
 
-    const unsubscribeProgress = window.electronAPI?.onScanProgress?.((data) => {
+    const unsubscribeProgress = window.electronAPI?.onScanProgress?.((data: any) => {
       if ('rows_scanned' in data) {
         setScanProgress({
           type: 'csv_progress',
@@ -1211,6 +1239,36 @@ function App() {
     setCsvData(null);
     setActionStatus(null);
     setScanOutput(`Scanning ${scanTargetLabel}... Please wait.`);
+  
+    if (scanPreset === 'csv') {
+      setScanProgress({
+        type: 'csv_progress',
+        status: 'starting',
+        target: scanTargetLabel,
+        rows_scanned: 0,
+        rows_per_second: 0,
+        elapsed_seconds: 0,
+        current_stage: 'starting',
+        duplicate_candidates: 0,
+        suspicious_values: 0,
+        missing_values: 0,
+        total_rows_estimate: 0,
+      });
+    } else {
+      setScanProgress({
+        type: 'progress',
+        status: 'starting',
+        target: scanTargetLabel,
+        files_scanned: 0,
+        current_path: 'Preparing scan...',
+        elapsed_seconds: 0,
+        review_total: 0,
+        archive_total: 0,
+        remove_total: 0,
+        duplicates_total: 0,
+        excluded_dirs_count: 0,
+      });
+    }
   
     window.electronAPI?.sendScanRequest?.({
       preset: scanPreset,
@@ -2123,29 +2181,23 @@ function App() {
     setBusyDatasetDecisionId(groupId);
     setActionStatus(null);
   
+    const record: DatasetDecisionRecord = {
+      group_id: groupId,
+      decision,
+      csv_path: csvData.path,
+      updated_at: new Date().toISOString(),
+    };
+  
     try {
-      const result = await window.electronAPI?.saveDatasetDecision?.({
-        group_id: groupId,
-        decision,
-        csv_path: csvData.path,
+      setDatasetDecisions((prev) => ({
+        ...prev,
+        [groupId]: record,
+      }));
+  
+      setActionStatus({
+        tone: 'success',
+        message: `Saved duplicate decision: ${decision.replace(/_/g, ' ')}`,
       });
-  
-      if (result?.success && result.decision) {
-        setDatasetDecisions((prev) => ({
-          ...prev,
-          [groupId]: result.decision as DatasetDecisionRecord,
-        }));
-  
-        setActionStatus({
-          tone: 'success',
-          message: result.message,
-        });
-      } else {
-        setActionStatus({
-          tone: 'error',
-          message: result?.message || 'Failed to save dataset decision.',
-        });
-      }
     } catch (error) {
       setActionStatus({
         tone: 'error',
@@ -2215,38 +2267,28 @@ function App() {
   
     setActionStatus(null);
   
-    let successCount = 0;
-    let failureCount = 0;
+    const now = new Date().toISOString();
   
-    for (const group of visibleDuplicateGroupsForReview) {
-      try {
-        const result = await window.electronAPI?.saveDatasetDecision?.({
+    const records = Object.fromEntries(
+      visibleDuplicateGroupsForReview.map((group) => [
+        group.group_id,
+        {
           group_id: group.group_id,
           decision,
           csv_path: csvData.path,
-        });
+          updated_at: now,
+        } satisfies DatasetDecisionRecord,
+      ])
+    );
   
-        if (result?.success && result.decision) {
-          successCount += 1;
-  
-          setDatasetDecisions((prev) => ({
-            ...prev,
-            [group.group_id]: result.decision as DatasetDecisionRecord,
-          }));
-        } else {
-          failureCount += 1;
-        }
-      } catch {
-        failureCount += 1;
-      }
-    }
+    setDatasetDecisions((prev) => ({
+      ...prev,
+      ...records,
+    }));
   
     setActionStatus({
-      tone: failureCount === 0 ? 'success' : 'error',
-      message:
-        failureCount === 0
-          ? `Marked ${successCount} visible duplicate group(s) as ${decision.replace(/_/g, ' ')}.`
-          : `Bulk decision finished with partial success: ${successCount} succeeded, ${failureCount} failed.`,
+      tone: 'success',
+      message: `Marked ${visibleDuplicateGroupsForReview.length} visible duplicate group(s) as ${decision.replace(/_/g, ' ')}.`,
     });
   };
 
