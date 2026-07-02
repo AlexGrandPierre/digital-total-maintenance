@@ -128,6 +128,15 @@ export type CsvScanResult = {
   duplicate_row_numbers_to_exclude?: number[];
   duplicate_groups_total: number;
 
+  review_index?: {
+    dataset_id: string;
+    csv_path: string;
+    duplicate_groups_total: number;
+    suspicious_values_total: number;
+    duplicate_index_path?: string;
+    suspicious_index_path?: string;
+  };
+
   review_queue?: {
     high_priority: {
       group_id: string;
@@ -171,6 +180,7 @@ export type CsvDataQualityInsight = {
   summary: string;
   count: number;
   affected_columns?: string[];
+  issue_id?: string;
   recommended_action: string;
 };
 
@@ -179,6 +189,7 @@ export type CsvSuspiciousValueExample = {
   column: string;
   value: string;
   issues: string[];
+  issue_id?: string;
 
   severity_score?: number;
   severity_label?: 'critical' | 'high' | 'medium' | 'low';

@@ -4,6 +4,7 @@ import ScanButton from './components/ScanButton';
 import InfoPanel from './components/InfoPanel';
 import QueueFileCard from './components/QueueFileCard';
 import FileBadge from './components/FileBadge';
+import { useCsvReviewIndex } from './hooks/useCsvReviewIndex';
 import type {
   ScanPreset,
   SortKey,
@@ -111,7 +112,7 @@ type SuspiciousDecisionRecord = {
   updated_at: string;
 };
 
-type ReviewCapacity = 25 | 50 | 100 | 250 | 'all';
+type ReviewCapacity = 25 | 50 | 100 | 250;
 
 type ScanProgress =
   | {
@@ -433,8 +434,7 @@ function ReviewCapacityControl({
       <select
         value={String(value)}
         onChange={(event) => {
-          const next = event.target.value;
-          onChange(next === 'all' ? 'all' : (Number(next) as ReviewCapacity));
+          onChange(Number(event.target.value) as ReviewCapacity);
         }}
         className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm outline-none transition hover:bg-slate-50"
       >
@@ -442,7 +442,6 @@ function ReviewCapacityControl({
         <option value="50">50</option>
         <option value="100">100</option>
         <option value="250">250</option>
-        <option value="all">All</option>
       </select>
     </div>
   );
@@ -619,14 +618,6 @@ function getRiskSummary(items: ClassifiedFile[]) {
     .slice(0, 3); // top 3 risks
 }
 
-function applyReviewCapacity<T>(
-  items: T[],
-  capacity: ReviewCapacity
-) {
-  if (capacity === 'all') return items;
-  return items.slice(0, capacity);
-}
-
 function formatDuration(seconds: number) {
   if (seconds < 60) return `${seconds}s`;
 
@@ -680,6 +671,8 @@ function App() {
   const [datasetDecisions, setDatasetDecisions] = useState<
     Record<string, DatasetDecisionRecord>
   >({});
+
+  const [isCsvReviewSessionReady, setIsCsvReviewSessionReady] = useState(false);
 
   const [busyDatasetDecisionId, setBusyDatasetDecisionId] = useState<string | null>(null);
 
@@ -758,6 +751,23 @@ function App() {
   const [suspiciousReviewCapacity, setSuspiciousReviewCapacity] =
     useState<ReviewCapacity>(25);
 
+
+    const {
+      loadedDuplicateGroups,
+      loadedSuspiciousExamples,
+      duplicateIndexTotal,
+      suspiciousIndexTotal,
+      duplicateHasMore,
+      suspiciousHasMore,
+      isLoadingDuplicatePage,
+      isLoadingSuspiciousPage,
+      initializeFromScan,
+      loadNextDuplicateBatch,
+      loadNextSuspiciousBatch,
+      resetDuplicateReviewIndex,
+      resetSuspiciousReviewIndex,
+    } = useCsvReviewIndex();
+
   const [duplicatePriorityFilter, setDuplicatePriorityFilter] = useState<
     'all' | 'critical' | 'high' | 'medium' | 'low'
   >('all');
@@ -824,23 +834,26 @@ function App() {
       setDuplicateVisibleCount(8);
 
       loadActionHistory();
-      loadDatasetDecisions();
 
       dispatchSession({ type: 'RESET_AFTER_RESCAN' });
-
+      
       try {
         const parsed = JSON.parse(output);
       
         if (parsed.type === 'csv_scan') {
           setCsvData(parsed);
           setScanData(null);
-          loadDatasetDecisions();
+      
+          initializeFromScan(parsed);
+      
+          setIsCsvReviewSessionReady(false);
           loadCsvReviewSession(parsed.path);
           return;
         }
       
         setScanData(parsed);
         setCsvData(null);
+        loadDatasetDecisions();
       } catch {
         setScanData(null);
         setCsvData(null);
@@ -2215,35 +2228,40 @@ function App() {
     if (!csvData?.path) return;
   
     const confirmed = window.confirm(
-      'Reset all duplicate decisions for this dataset?'
+      'Reset all duplicate and suspicious decisions for this dataset?'
     );
   
     if (!confirmed) return;
   
     try {
-      const result =
-        await window.electronAPI?.resetDatasetDecisions?.({
-          csv_path: csvData.path,
+      const emptyDuplicateDecisions: Record<string, DatasetDecisionRecord> = {};
+      const emptySuspiciousDecisions: Record<string, SuspiciousDecisionRecord> = {};
+  
+      setDatasetDecisions(emptyDuplicateDecisions);
+      setSuspiciousDecisions(emptySuspiciousDecisions);
+  
+      resetDuplicateReviewIndex();
+      resetSuspiciousReviewIndex();
+      initializeFromScan(csvData);
+  
+      const result = await window.electronAPI?.saveCsvReviewSession?.({
+        csv_path: csvData.path,
+        duplicate_decisions: emptyDuplicateDecisions,
+        suspicious_decisions: emptySuspiciousDecisions,
+      });
+  
+      if (result?.success && result.session) {
+        setCsvReviewSession({
+          csv_path: result.session.csv_path,
+          session_id: result.session.session_id,
+          last_updated: result.session.last_updated,
         });
   
-        if (result?.success) {
-          await loadDatasetDecisions();
-        
-          setSuspiciousDecisions((prev) => {
-            if (!csvData?.path) return prev;
-        
-            return Object.fromEntries(
-              Object.entries(prev).filter(([, record]) => {
-                return record.csv_path !== csvData.path;
-              })
-            );
-          });
-        
-          setActionStatus({
-            tone: 'success',
-            message: `${result.message} Suspicious value decisions for this dataset were also reset.`,
-          });
-        }else {
+        setActionStatus({
+          tone: 'success',
+          message: 'Reset duplicate and suspicious decisions for this dataset.',
+        });
+      } else {
         setActionStatus({
           tone: 'error',
           message:
@@ -2293,10 +2311,13 @@ function App() {
   };
 
   const getSuspiciousIssueId = (example: {
+    issue_id?: string;
     row_number: number;
     column: string;
     value?: string;
   }) => {
+    if (example.issue_id) return example.issue_id;
+  
     const datasetPath = csvData?.path ?? 'unknown-dataset';
   
     return [
@@ -2308,7 +2329,7 @@ function App() {
   };
 
   useEffect(() => {
-    if (!csvData?.success || !csvData.path) return;
+    if (!csvData?.success || !csvData.path || !isCsvReviewSessionReady) return;
   
     const timeoutId = window.setTimeout(() => {
       window.electronAPI?.saveCsvReviewSession?.({
@@ -2319,7 +2340,7 @@ function App() {
     }, 500);
   
     return () => window.clearTimeout(timeoutId);
-  }, [csvData?.path, csvData?.success, datasetDecisions, suspiciousDecisions]);
+  }, [csvData?.path, csvData?.success, datasetDecisions, suspiciousDecisions, isCsvReviewSessionReady]);
 
   const handleBulkSuspiciousDecision = async (
     decision: SuspiciousDecision
@@ -2365,6 +2386,8 @@ function App() {
   };
 
   const loadCsvReviewSession = async (csvPath: string) => {
+    setIsCsvReviewSessionReady(false);
+  
     try {
       const result = await window.electronAPI?.loadCsvReviewSession?.({
         csv_path: csvPath,
@@ -2377,20 +2400,18 @@ function App() {
           last_updated: result.session.last_updated,
         });
   
-        if (result.session.duplicate_decisions) {
-          setDatasetDecisions(
-            result.session.duplicate_decisions as Record<string, DatasetDecisionRecord>
-          );
-        }
-
-        if (result.session.suspicious_decisions) {
-          setSuspiciousDecisions(
-            result.session.suspicious_decisions as Record<string, SuspiciousDecisionRecord>
-          );
-        }
+        setDatasetDecisions(
+          (result.session.duplicate_decisions ?? {}) as Record<string, DatasetDecisionRecord>
+        );
+  
+        setSuspiciousDecisions(
+          (result.session.suspicious_decisions ?? {}) as Record<string, SuspiciousDecisionRecord>
+        );
       }
     } catch {
       setCsvReviewSession(null);
+    } finally {
+      setIsCsvReviewSessionReady(true);
     }
   };
 
@@ -2467,7 +2488,7 @@ function App() {
         ? csvData?.duplicate_group_samples?.medium_priority ?? []
         : reviewQueueFilter === 'low'
         ? csvData?.duplicate_group_samples?.low_priority ?? []
-        : csvData?.duplicate_groups ?? [];
+        : loadedDuplicateGroups;
     
     if (duplicatePriorityFilter !== 'all') {
       groups = groups.filter(
@@ -2483,10 +2504,10 @@ function App() {
     }
   
     return groups;
-  }, [csvData, reviewQueueFilter, duplicatePriorityFilter, decisionFilter, datasetDecisions]);
+  }, [csvData, loadedDuplicateGroups, reviewQueueFilter, duplicatePriorityFilter, decisionFilter, datasetDecisions]);
 
   const filteredSuspiciousExamples = useMemo(() => {
-    const examples = csvData?.suspicious_value_summary?.examples ?? [];
+    const examples = loadedSuspiciousExamples;
   
     let sortedExamples = [...examples].sort((a, b) => {
       const scoreA = a.severity_score ?? 0;
@@ -2514,76 +2535,71 @@ function App() {
       return decision === suspiciousDecisionFilter;
     });
   }, [
-    csvData,
+    loadedSuspiciousExamples,
+    csvData?.path,
     suspiciousSeverityFilter,
     suspiciousDecisionFilter,
     suspiciousDecisions,
   ]);
 
   const visibleDuplicateGroupsForReview = useMemo(() => {
-    return applyReviewCapacity(filteredDuplicateGroups, duplicateReviewCapacity);
-  }, [filteredDuplicateGroups, duplicateReviewCapacity]);
+    return filteredDuplicateGroups;
+  }, [filteredDuplicateGroups]);
   
   const visibleSuspiciousExamplesForReview = useMemo(() => {
-    return applyReviewCapacity(filteredSuspiciousExamples, suspiciousReviewCapacity);
-  }, [filteredSuspiciousExamples, suspiciousReviewCapacity]);
+    return filteredSuspiciousExamples;
+  }, [filteredSuspiciousExamples]);
 
   const datasetDecisionSummary = useMemo(() => {
-    const groups = csvData?.duplicate_groups ?? [];
+    const reviewed = Object.values(datasetDecisions).filter((record) => {
+      return (
+        record.csv_path === csvData?.path &&
+        record.decision !== 'pending'
+      );
+    }).length;
   
-    const counts = {
-      totalVisible: groups.length,
-      approved_duplicate: 0,
-      legitimate_records: 0,
-      needs_review: 0,
-      ignored: 0,
-      pending: 0,
-      reviewed: 0,
+    return {
+      totalVisible: duplicateIndexTotal,
+      approved_duplicate: Object.values(datasetDecisions).filter(
+        (record) => record.csv_path === csvData?.path && record.decision === 'approved_duplicate'
+      ).length,
+      legitimate_records: Object.values(datasetDecisions).filter(
+        (record) => record.csv_path === csvData?.path && record.decision === 'legitimate_records'
+      ).length,
+      needs_review: Object.values(datasetDecisions).filter(
+        (record) => record.csv_path === csvData?.path && record.decision === 'needs_review'
+      ).length,
+      ignored: Object.values(datasetDecisions).filter(
+        (record) => record.csv_path === csvData?.path && record.decision === 'ignored'
+      ).length,
+      pending: Math.max(0, duplicateIndexTotal - reviewed),
+      reviewed,
     };
-  
-    for (const group of groups) {
-      const decision = datasetDecisions[group.group_id]?.decision || 'pending';
-  
-      if (decision === 'approved_duplicate') counts.approved_duplicate += 1;
-      else if (decision === 'legitimate_records') counts.legitimate_records += 1;
-      else if (decision === 'needs_review') counts.needs_review += 1;
-      else if (decision === 'ignored') counts.ignored += 1;
-      else counts.pending += 1;
-    }
-  
-    counts.reviewed =
-      counts.approved_duplicate +
-      counts.legitimate_records +
-      counts.needs_review +
-      counts.ignored;
-  
-    return counts;
-  }, [csvData, datasetDecisions]);
-
-  const suspiciousExamples =
-  csvData?.suspicious_value_summary?.examples ?? [];
+  }, [csvData?.path, duplicateIndexTotal, datasetDecisions]);
 
   const suspiciousReviewedCount = useMemo(() => {
-    return suspiciousExamples.filter((example) => {
-      const issueId = getSuspiciousIssueId(example);
-      const decision = suspiciousDecisions[issueId]?.decision || 'pending';
-
-      return decision !== 'pending';
+    if (!csvData?.path) return 0;
+  
+    return Object.values(suspiciousDecisions).filter((record) => {
+      return (
+        record.csv_path === csvData.path &&
+        record.decision !== 'pending'
+      );
     }).length;
-  }, [suspiciousExamples, suspiciousDecisions, csvData?.path]);
-
+  }, [suspiciousDecisions, csvData?.path]);
+  
   const suspiciousPendingCount = Math.max(
     0,
-    suspiciousExamples.length - suspiciousReviewedCount
+    suspiciousIndexTotal - suspiciousReviewedCount
   );
 
   const suspiciousCompletionPercentage =
-    suspiciousExamples.length === 0
+    suspiciousIndexTotal === 0
       ? 0
       : Math.min(
           100,
           Math.round(
-            (suspiciousReviewedCount / suspiciousExamples.length) * 100
+            (suspiciousReviewedCount / suspiciousIndexTotal) * 100
           )
         );
   
@@ -3759,9 +3775,18 @@ function App() {
                           </p>
                         </div>
 
-                        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-sky-800 ring-1 ring-sky-200">
-                          {csvReviewSession?.last_updated ? 'Session restored' : 'New session'}
-                        </span>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-sky-800 ring-1 ring-sky-200">
+                            {csvReviewSession?.last_updated ? 'Session restored' : 'New session'}
+                          </span>
+
+                          <button
+                            onClick={handleResetDatasetDecisions}
+                            className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-rose-800 ring-1 ring-rose-200 transition hover:bg-rose-50 active:scale-[0.98]"
+                          >
+                            Reset decisions
+                          </button>
+                        </div>
                       </div>
 
                       <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -3775,7 +3800,7 @@ function App() {
                         <div className="rounded-2xl bg-white px-4 py-3 ring-1 ring-sky-100">
                           <div className="text-xs font-medium text-sky-700">Saved decisions</div>
                           <div className="mt-1 text-2xl font-semibold text-slate-900">
-                            {Object.keys(datasetDecisions).length}
+                          {Object.keys(datasetDecisions).length + Object.keys(suspiciousDecisions).length}
                           </div>
                         </div>
 
@@ -3908,13 +3933,6 @@ function App() {
                         className="rounded-full bg-emerald-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-emerald-800"
                       >
                         Export clean copy
-                      </button>
-
-                      <button
-                        onClick={handleResetDatasetDecisions}
-                        className="rounded-full bg-rose-900 px-3 py-1.5 text-xs font-semibold text-white"
-                      >
-                        Reset Decisions
                       </button>
 
                       <button
@@ -4052,6 +4070,7 @@ function App() {
                                     event.target.value as 'all' | 'critical' | 'high' | 'medium' | 'low'
                                   );
                                   setDuplicateReviewCapacity(25);
+                                  resetDuplicateReviewIndex();
                                 }}
                                 className="h-8 w-24 rounded-full border border-amber-200 bg-white px-2 text-xs font-semibold text-amber-900 outline-none transition hover:bg-amber-50"
                               >
@@ -4067,7 +4086,7 @@ function App() {
                           <ReviewCapacityControl
                             label="Review Capacity"
                             value={duplicateReviewCapacity}
-                            total={filteredDuplicateGroups.length}
+                            total={Math.max(0, duplicateIndexTotal - datasetDecisionSummary.reviewed)}
                             visible={visibleDuplicateGroupsForReview.length}
                             onChange={setDuplicateReviewCapacity}
                           />
@@ -4095,6 +4114,7 @@ function App() {
                                     | 'ignored'
                                 );
                                 setDuplicateReviewCapacity(25);
+                                resetDuplicateReviewIndex();
                               }}
                               className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
                                 decisionFilter === value
@@ -4170,8 +4190,9 @@ function App() {
                             No duplicate-like record groups detected.
                           </div>
                         ) : (
-                          <div className="mt-4 max-h-[420px] space-y-3 overflow-y-auto pr-1">
-                            {visibleDuplicateGroupsForReview.map((group, index) => (
+                          <>
+                            <div className="mt-4 max-h-[420px] space-y-3 overflow-y-auto pr-1">
+                              {visibleDuplicateGroupsForReview.map((group, index) => (
                               <div
                                 key={group.group_id}
                                 className="rounded-2xl border border-amber-200 bg-white px-4 py-4"
@@ -4315,7 +4336,31 @@ function App() {
                                 ) : null}
                               </div>
                             ))}
-                          </div>
+                            </div>
+                        
+                            {duplicateHasMore ? (
+                              <div className="mt-4 flex justify-center">
+                                <button
+                                  disabled={isLoadingDuplicatePage || !duplicateHasMore}
+                                  onClick={() => {
+                                    if (!csvData?.path) return;
+                                    loadNextDuplicateBatch(
+                                      csvData.path,
+                                      duplicateReviewCapacity,
+                                      decisionFilter === 'pending' ? Object.keys(datasetDecisions) : []
+                                    );
+                                  }}
+                                className="rounded-full bg-amber-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-amber-800 active:scale-[0.97] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 disabled:active:scale-100"
+                                >
+                                  {isLoadingDuplicatePage
+                                    ? 'Loading...'
+                                    : duplicateHasMore
+                                    ? `Load next ${duplicateReviewCapacity}`
+                                    : 'All Loaded'}
+                                </button>
+                              </div>
+                            ) : null}
+                          </>
                         )}
                       </div>
 
@@ -4350,13 +4395,33 @@ function App() {
 
                               {showSuspiciousExportMenu ? (
                                 <div className="absolute left-0 z-20 mt-2 w-64 rounded-xl border border-slate-200 bg-white shadow-lg">
-                                  <button onClick={() => { handleCsvAction('export_suspicious_rows'); setShowSuspiciousExportMenu(false); }} className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50">
+                                  <button
+                                    onClick={() => {
+                                      handleCsvAction('export_suspicious_rows');
+                                      setShowSuspiciousExportMenu(false);
+                                    }}
+                                    className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
+                                  >
                                     All suspicious rows
                                   </button>
-                                  <button onClick={() => { handleCsvAction('export_corrupted_suspicious_rows'); setShowSuspiciousExportMenu(false); }} className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50">
+
+                                  <button
+                                    onClick={() => {
+                                      handleCsvAction('export_corrupted_suspicious_rows');
+                                      setShowSuspiciousExportMenu(false);
+                                    }}
+                                    className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
+                                  >
                                     Corrupted suspicious rows
                                   </button>
-                                  <button onClick={() => { handleCsvAction('export_suspicious_needs_review'); setShowSuspiciousExportMenu(false); }} className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50">
+
+                                  <button
+                                    onClick={() => {
+                                      handleCsvAction('export_suspicious_needs_review');
+                                      setShowSuspiciousExportMenu(false);
+                                    }}
+                                    className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
+                                  >
                                     Needs-review suspicious rows
                                   </button>
                                 </div>
@@ -4373,16 +4438,43 @@ function App() {
 
                               {showSuspiciousBulkMenu ? (
                                 <div className="absolute left-0 z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white shadow-lg">
-                                  <button onClick={() => { handleBulkSuspiciousDecision('valid_data'); setShowSuspiciousBulkMenu(false); }} className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50">
+                                  <button
+                                    onClick={() => {
+                                      handleBulkSuspiciousDecision('valid_data');
+                                      setShowSuspiciousBulkMenu(false);
+                                    }}
+                                    className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
+                                  >
                                     Valid Visible
                                   </button>
-                                  <button onClick={() => { handleBulkSuspiciousDecision('corrupted'); setShowSuspiciousBulkMenu(false); }} className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50">
+
+                                  <button
+                                    onClick={() => {
+                                      handleBulkSuspiciousDecision('corrupted');
+                                      setShowSuspiciousBulkMenu(false);
+                                    }}
+                                    className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
+                                  >
                                     Corrupted Visible
                                   </button>
-                                  <button onClick={() => { handleBulkSuspiciousDecision('needs_review'); setShowSuspiciousBulkMenu(false); }} className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50">
+
+                                  <button
+                                    onClick={() => {
+                                      handleBulkSuspiciousDecision('needs_review');
+                                      setShowSuspiciousBulkMenu(false);
+                                    }}
+                                    className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
+                                  >
                                     Needs Review Visible
                                   </button>
-                                  <button onClick={() => { handleBulkSuspiciousDecision('ignored'); setShowSuspiciousBulkMenu(false); }} className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50">
+
+                                  <button
+                                    onClick={() => {
+                                      handleBulkSuspiciousDecision('ignored');
+                                      setShowSuspiciousBulkMenu(false);
+                                    }}
+                                    className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
+                                  >
                                     Ignore Visible
                                   </button>
                                 </div>
@@ -4397,6 +4489,7 @@ function App() {
                                     event.target.value as 'all' | 'critical' | 'high' | 'medium' | 'low'
                                   );
                                   setSuspiciousReviewCapacity(25);
+                                  resetSuspiciousReviewIndex();
                                 }}
                                 className="h-8 w-24 rounded-full border border-rose-200 bg-white px-2 text-xs font-semibold text-rose-900 outline-none transition hover:bg-rose-50"
                               >
@@ -4412,7 +4505,7 @@ function App() {
                           <ReviewCapacityControl
                             label="Review Capacity"
                             value={suspiciousReviewCapacity}
-                            total={filteredSuspiciousExamples.length}
+                            total={suspiciousPendingCount}
                             visible={visibleSuspiciousExamplesForReview.length}
                             onChange={setSuspiciousReviewCapacity}
                           />
@@ -4430,18 +4523,18 @@ function App() {
                             <button
                               key={value}
                               onClick={() => {
-                                  setSuspiciousDecisionFilter(
-                                    value as
-                                      | 'all'
-                                      | 'pending'
-                                      | 'valid_data'
-                                      | 'corrupted'
-                                      | 'needs_review'
-                                      | 'ignored'
-                                  )
-                                  setSuspiciousReviewCapacity(25);
-                                }
-                              }
+                                setSuspiciousDecisionFilter(
+                                  value as
+                                    | 'all'
+                                    | 'pending'
+                                    | 'valid_data'
+                                    | 'corrupted'
+                                    | 'needs_review'
+                                    | 'ignored'
+                                );
+                                setSuspiciousReviewCapacity(25);
+                                resetSuspiciousReviewIndex();
+                              }}
                               className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
                                 suspiciousDecisionFilter === value
                                   ? 'bg-rose-900 text-white'
@@ -4488,54 +4581,54 @@ function App() {
                         <div className="mt-4 h-2 overflow-hidden rounded-full bg-rose-100">
                           <div
                             className="h-full rounded-full bg-rose-500 transition-all"
-                            style={{
-                              width: `${suspiciousCompletionPercentage}%`,
-                            }}
+                            style={{ width: `${suspiciousCompletionPercentage}%` }}
                           />
                         </div>
 
                         <p className="mt-2 text-xs text-slate-500">
-                          {suspiciousReviewedCount} of {suspiciousExamples.length} suspicious values reviewed.
+                          {suspiciousReviewedCount} of {suspiciousIndexTotal} suspicious values reviewed.
                         </p>
 
                         {visibleSuspiciousExamplesForReview.length === 0 ? (
                           <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-                            No suspicious value examples detected.
+                            {suspiciousDecisionFilter === 'all'
+                              ? 'No suspicious value examples are currently loaded. Use Load next to continue reviewing.'
+                              : `No ${suspiciousDecisionFilter.replace(/_/g, ' ')} suspicious values are currently loaded.`}
                           </div>
                         ) : (
                           <div className="mt-4 max-h-[420px] space-y-3 overflow-y-auto pr-1">
-                            {visibleSuspiciousExamplesForReview.map((example, index) => (
-                              <div
-                                key={`${example.row_number}-${example.column}-${index}`}
-                                className="rounded-2xl border border-rose-200 bg-white px-4 py-4"
-                              >
-                                <div className="flex items-start justify-between gap-3">
-                                  <div>
-                                    <div className="text-sm font-semibold text-slate-900">
-                                      Row {example.row_number}
+                            {visibleSuspiciousExamplesForReview.map((example) => {
+                              const issueId = getSuspiciousIssueId(example);
+                              const savedDecision = suspiciousDecisions[issueId]?.decision || 'pending';
+
+                              return (
+                                <div
+                                  key={issueId}
+                                  className="rounded-2xl border border-rose-200 bg-white px-4 py-4"
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                      <div className="text-sm font-semibold text-slate-900">
+                                        Row {example.row_number}
+                                      </div>
+
+                                      <div className="mt-1 text-xs text-slate-500">
+                                        Column: {example.column}
+                                      </div>
                                     </div>
 
-                                    <div className="mt-1 text-xs text-slate-500">
-                                      Column: {example.column}
-                                    </div>
+                                    {example.severity_label ? (
+                                      <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-rose-800 ring-1 ring-rose-200">
+                                        {example.severity_label} severity
+                                      </span>
+                                    ) : (
+                                      <span className="rounded-full bg-rose-100 px-2.5 py-1 text-[11px] font-medium text-rose-800 ring-1 ring-rose-200">
+                                        review
+                                      </span>
+                                    )}
                                   </div>
 
-                                  {example.severity_label ? (
-                                    <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-rose-800 ring-1 ring-rose-200">
-                                      {example.severity_label} severity
-                                    </span>
-                                  ) : (
-                                    <span className="rounded-full bg-rose-100 px-2.5 py-1 text-[11px] font-medium text-rose-800 ring-1 ring-rose-200">
-                                      review
-                                    </span>
-                                  )}
-                                </div>
-
-                                {(() => {
-                                  const issueId = getSuspiciousIssueId(example);
-                                  const savedDecision = suspiciousDecisions[issueId]?.decision || 'pending';
-
-                                  return (
+                                  <div className="mt-3">
                                     <span
                                       className={`rounded-full px-2.5 py-1 text-[11px] font-medium ring-1 ${
                                         savedDecision === 'corrupted'
@@ -4551,188 +4644,210 @@ function App() {
                                     >
                                       {savedDecision.replace(/_/g, ' ')}
                                     </span>
-                                  );
+                                  </div>
 
                                   {example.severity_reason ? (
                                     <div className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-800 ring-1 ring-rose-100">
                                       {example.severity_reason}
                                     </div>
                                   ) : null}
-                                })()}
 
-                                <div className="mt-4 flex flex-wrap gap-2">
-                                  <button
-                                    onClick={() => handleSaveSuspiciousDecision(example, 'valid_data')}
-                                    disabled={busySuspiciousDecisionId === getSuspiciousIssueId(example)}
-                                    className="rounded-full bg-emerald-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-                                  >
-                                    Valid data
-                                  </button>
-
-                                  <button
-                                    onClick={() => handleSaveSuspiciousDecision(example, 'corrupted')}
-                                    disabled={busySuspiciousDecisionId === getSuspiciousIssueId(example)}
-                                    className="rounded-full bg-rose-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-rose-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-                                  >
-                                    Corrupted
-                                  </button>
-
-                                  <button
-                                    onClick={() => handleSaveSuspiciousDecision(example, 'needs_review')}
-                                    disabled={busySuspiciousDecisionId === getSuspiciousIssueId(example)}
-                                    className="rounded-full bg-amber-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-                                  >
-                                    Needs review
-                                  </button>
-
-                                  <button
-                                    onClick={() => handleSaveSuspiciousDecision(example, 'ignored')}
-                                    disabled={busySuspiciousDecisionId === getSuspiciousIssueId(example)}
-                                    className="rounded-full bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-600 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-                                  >
-                                    Ignore
-                                  </button>
-                                </div>
-
-                                <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-700 break-all">
-                                  {example.value || '—'}
-                                </div>
-
-                                <div className="mt-3 flex flex-wrap gap-2">
-                                  {example.issues.map((issue) => (
-                                    <span
-                                      key={`${example.row_number}-${example.column}-${issue}`}
-                                      className="rounded-full bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-800 ring-1 ring-rose-200"
+                                  <div className="mt-4 flex flex-wrap gap-2">
+                                    <button
+                                      onClick={() => handleSaveSuspiciousDecision(example, 'valid_data')}
+                                      disabled={busySuspiciousDecisionId === issueId}
+                                      className="rounded-full bg-emerald-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
                                     >
-                                      {issue.replace(/_/g, ' ')}
-                                    </span>
-                                  ))}
+                                      Valid data
+                                    </button>
+
+                                    <button
+                                      onClick={() => handleSaveSuspiciousDecision(example, 'corrupted')}
+                                      disabled={busySuspiciousDecisionId === issueId}
+                                      className="rounded-full bg-rose-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-rose-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                                    >
+                                      Corrupted
+                                    </button>
+
+                                    <button
+                                      onClick={() => handleSaveSuspiciousDecision(example, 'needs_review')}
+                                      disabled={busySuspiciousDecisionId === issueId}
+                                      className="rounded-full bg-amber-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                                    >
+                                      Needs review
+                                    </button>
+
+                                    <button
+                                      onClick={() => handleSaveSuspiciousDecision(example, 'ignored')}
+                                      disabled={busySuspiciousDecisionId === issueId}
+                                      className="rounded-full bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-600 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                                    >
+                                      Ignore
+                                    </button>
+                                  </div>
+
+                                  <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-700 break-all">
+                                    {example.value || '—'}
+                                  </div>
+
+                                  <div className="mt-3 flex flex-wrap gap-2">
+                                    {example.issues.map((issue) => (
+                                      <span
+                                        key={`${issueId}-${issue}`}
+                                        className="rounded-full bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-800 ring-1 ring-rose-200"
+                                      >
+                                        {issue.replace(/_/g, ' ')}
+                                      </span>
+                                    ))}
+                                  </div>
                                 </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
+
+                        {suspiciousHasMore ? (
+                          <div className="mt-4 flex justify-center">
+                            <button
+                              disabled={isLoadingSuspiciousPage || !suspiciousHasMore}
+                              onClick={() => {
+                                if (!csvData?.path) return;
+                                loadNextSuspiciousBatch(
+                                  csvData.path,
+                                  suspiciousReviewCapacity,
+                                  suspiciousDecisionFilter === 'pending' ? Object.keys(suspiciousDecisions) : []
+                                );
+                              }}
+                              className="rounded-full bg-rose-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-rose-800 active:scale-[0.97] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 disabled:active:scale-100"
+                            >
+                              {isLoadingSuspiciousPage
+                                ? 'Loading...'
+                                : suspiciousHasMore
+                                ? `Load next ${suspiciousReviewCapacity}`
+                                : 'All Loaded'}
+                            </button>
+                          </div>
+                        ) : null}
+                        </div>
                       </div>
-                    </div>
+                    </section>
+  
+                    <section className="rounded-[2rem] border border-sky-100 bg-sky-50/40 px-6 py-5 shadow-sm">
+                      <div className="mb-4 flex items-start justify-between gap-4">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-700">
+                            Column Intelligence
+                          </div>
 
-                  </section>
+                          <h3 className="mt-1 text-xl font-semibold text-slate-900">
+                            Structure and value patterns
+                          </h3>
+                        </div>
+                      </div>
 
-                  <section className="rounded-[2rem] border border-sky-100 bg-sky-50/40 px-6 py-5 shadow-sm">
-                    <div className="mb-4 flex items-start justify-between gap-4">
-                      <div>
-                        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-700">
-                          Column Intelligence
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                        {Object.values(csvData.column_profiles ?? {}).map((profile) => (
+                          <div
+                            key={profile.name}
+                            className="rounded-2xl border border-sky-100 bg-white px-4 py-4"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-semibold text-slate-900">
+                                  {profile.name}
+                                </div>
+
+                                <div className="mt-1 text-xs text-slate-500">
+                                  {profile.non_empty_count.toLocaleString()} filled ·{' '}
+                                  {profile.empty_count.toLocaleString()} empty
+                                </div>
+                              </div>
+
+                              <span className="rounded-full bg-sky-50 px-2.5 py-1 text-[11px] font-medium text-sky-800 ring-1 ring-sky-200">
+                                {profile.inferred_type}
+                              </span>
+                            </div>
+
+                            <div className="mt-3 text-sm text-slate-700">
+                              <span className="font-semibold">
+                                {profile.unique_count.toLocaleString()}
+                              </span>{' '}
+                              unique value{profile.unique_count === 1 ? '' : 's'}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+
+                    <section className="rounded-[2rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
+                      <div className="mb-4">
+                        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                          Table Preview
                         </div>
 
                         <h3 className="mt-1 text-xl font-semibold text-slate-900">
-                          Structure and value patterns
+                          First rows for visual validation
                         </h3>
                       </div>
-                    </div>
 
-                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-                      {Object.values(csvData.column_profiles ?? {}).map((profile) => (
-                        <div
-                          key={profile.name}
-                          className="rounded-2xl border border-sky-100 bg-white px-4 py-4"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="truncate text-sm font-semibold text-slate-900">
-                                {profile.name}
-                              </div>
-
-                              <div className="mt-1 text-xs text-slate-500">
-                                {profile.non_empty_count.toLocaleString()} filled ·{' '}
-                                {profile.empty_count.toLocaleString()} empty
-                              </div>
-                            </div>
-
-                            <span className="rounded-full bg-sky-50 px-2.5 py-1 text-[11px] font-medium text-sky-800 ring-1 ring-sky-200">
-                              {profile.inferred_type}
-                            </span>
-                          </div>
-
-                          <div className="mt-3 text-sm text-slate-700">
-                            <span className="font-semibold">
-                              {profile.unique_count.toLocaleString()}
-                            </span>{' '}
-                            unique value{profile.unique_count === 1 ? '' : 's'}
-                          </div>
+                      {(csvData.preview_rows ?? []).length === 0 ? (
+                        <div className="rounded-2xl bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                          No preview rows available.
                         </div>
-                      ))}
-                    </div>
-                  </section>
-
-                  <section className="rounded-[2rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
-                    <div className="mb-4">
-                      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                        Table Preview
-                      </div>
-
-                      <h3 className="mt-1 text-xl font-semibold text-slate-900">
-                        First rows for visual validation
-                      </h3>
-                    </div>
-
-                    {(csvData.preview_rows ?? []).length === 0 ? (
-                      <div className="rounded-2xl bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                        No preview rows available.
-                      </div>
-                    ) : (
-                      <div className="overflow-hidden rounded-2xl border border-slate-200">
-                        <div className="max-h-[420px] overflow-auto">
-                          <table className="min-w-full border-collapse text-left text-sm">
-                            <thead className="sticky top-0 bg-slate-100 text-xs uppercase tracking-[0.12em] text-slate-500">
-                              <tr>
-                                {(csvData.columns ?? []).map((column) => (
-                                  <th
-                                    key={column}
-                                    className="border-b border-slate-200 px-4 py-3 font-semibold"
-                                  >
-                                    {column}
-                                  </th>
-                                ))}
-                              </tr>
-                            </thead>
-
-                            <tbody className="divide-y divide-slate-100 bg-white">
-                              {(csvData.preview_rows ?? []).map((row, rowIndex) => (
-                                <tr key={rowIndex} className="hover:bg-slate-50">
-                                  {(csvData.columns ?? []).map((column) => {
-                                    const value = row[column];
-
-                                    return (
-                                      <td
-                                        key={`${rowIndex}-${column}`}
-                                        className="max-w-[280px] whitespace-nowrap px-4 py-3 text-slate-700"
-                                      >
-                                        <span className="block truncate">
-                                          {value === null ||
-                                          value === undefined ||
-                                          String(value).trim() === ''
-                                            ? '—'
-                                            : String(value)}
-                                        </span>
-                                      </td>
-                                    );
-                                  })}
+                      ) : (
+                        <div className="overflow-hidden rounded-2xl border border-slate-200">
+                          <div className="max-h-[420px] overflow-auto">
+                            <table className="min-w-full border-collapse text-left text-sm">
+                              <thead className="sticky top-0 bg-slate-100 text-xs uppercase tracking-[0.12em] text-slate-500">
+                                <tr>
+                                  {(csvData.columns ?? []).map((column) => (
+                                    <th
+                                      key={column}
+                                      className="border-b border-slate-200 px-4 py-3 font-semibold"
+                                    >
+                                      {column}
+                                    </th>
+                                  ))}
                                 </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    )}
+                              </thead>
 
-                    <p className="mt-2 text-xs text-slate-500">
-                      Showing a bounded preview only. DTM has not modified the original CSV.
-                    </p>
-                  </section>
-                </>
-              ) : null}
-            </section>
-          ) : null}
+                              <tbody className="divide-y divide-slate-100 bg-white">
+                                {(csvData.preview_rows ?? []).map((row, rowIndex) => (
+                                  <tr key={rowIndex} className="hover:bg-slate-50">
+                                    {(csvData.columns ?? []).map((column) => {
+                                      const value = row[column];
+
+                                      return (
+                                        <td
+                                          key={`${rowIndex}-${column}`}
+                                          className="max-w-[280px] whitespace-nowrap px-4 py-3 text-slate-700"
+                                        >
+                                          <span className="block truncate">
+                                            {value === null ||
+                                            value === undefined ||
+                                            String(value).trim() === ''
+                                              ? '—'
+                                              : String(value)}
+                                          </span>
+                                        </td>
+                                      );
+                                    })}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      <p className="mt-2 text-xs text-slate-500">
+                        Showing a bounded preview only. DTM has not modified the original CSV.
+                      </p>
+                    </section>
+                  </>
+                ) : null}
+              </section>
+            ) : null}
 
           {scanData ? (
             <section className="space-y-8">

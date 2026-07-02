@@ -7,6 +7,7 @@ import sys
 import time
 from collections import Counter
 from datetime import datetime
+from pathlib import Path
 
 
 PREVIEW_ROW_LIMIT = 10
@@ -662,6 +663,54 @@ def estimate_total_rows(csv_path):
     except Exception:
         return None
 
+def make_dataset_id(csv_path):
+    normalized = str(Path(csv_path).expanduser().resolve())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+
+def get_csv_review_index_dir(dtm_root, csv_path):
+    dataset_id = make_dataset_id(csv_path)
+    index_dir = (
+        Path(dtm_root)
+        / "CSV Review Index"
+        / dataset_id
+    )
+    index_dir.mkdir(parents=True, exist_ok=True)
+    return index_dir
+
+
+def write_jsonl(path, records):
+    with open(path, "w", encoding="utf-8") as file:
+        for record in records:
+            file.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def write_csv_review_index(dtm_root, csv_path, duplicate_groups, suspicious_examples):
+    index_dir = get_csv_review_index_dir(dtm_root, csv_path)
+
+    duplicate_index_path = index_dir / "duplicate-groups.jsonl"
+    suspicious_index_path = index_dir / "suspicious-values.jsonl"
+    summary_path = index_dir / "index-summary.json"
+
+    write_jsonl(duplicate_index_path, duplicate_groups)
+    write_jsonl(suspicious_index_path, suspicious_examples)
+
+    summary = {
+        "dataset_id": make_dataset_id(csv_path),
+        "csv_path": str(Path(csv_path).expanduser().resolve()),
+        "duplicate_groups_total": len(duplicate_groups),
+        "suspicious_values_total": len(suspicious_examples),
+        "duplicate_index_path": str(duplicate_index_path),
+        "suspicious_index_path": str(suspicious_index_path),
+    }
+
+    with open(summary_path, "w", encoding="utf-8") as file:
+        json.dump(summary, file, indent=2)
+
+    return summary
+
+def get_default_dtm_root():
+    return str(Path.home() / "Desktop" / "Digital Total Maintenance")
 
 def scan_csv(csv_path):
     if not csv_path or not os.path.exists(csv_path):
@@ -680,6 +729,7 @@ def scan_csv(csv_path):
         suspicious_by_column = Counter()
         suspicious_by_issue = Counter()
         suspicious_examples = []
+        suspicious_examples_all = []
         suspicious_row_numbers = set()
 
         duplicate_candidates_count = 0
@@ -794,40 +844,45 @@ def scan_csv(csv_path):
                         for issue in set(issues):
                             suspicious_by_issue[issue] += 1
 
+                        row_missing_count = sum(
+                            1 for column_name in columns
+                            if normalized_row.get(column_name, "") == ""
+                        )
+
+                        severity_score = min(100, (len(issues) * 30) + min(row_missing_count * 5, 40))
+
+                        if severity_score >= 80:
+                            severity_label = "critical"
+                        elif severity_score >= 60:
+                            severity_label = "high"
+                        elif severity_score >= 35:
+                            severity_label = "medium"
+                        else:
+                            severity_label = "low"
+
+                        severity_reason = (
+                            f"This cell has {len(issues)} suspicious signal"
+                            f"{'' if len(issues) == 1 else 's'}"
+                            f" and appears in a row with {row_missing_count} missing field"
+                            f"{'' if row_missing_count == 1 else 's'}."
+                        )
+
+                        suspicious_record = {
+                            "issue_id": f"csv-suspicious-{row_count}-{make_group_id([column, value])}",
+                            "row_number": row_count,
+                            "column": column,
+                            "value": value,
+                            "issues": issues,
+                            "severity_score": severity_score,
+                            "severity_label": severity_label,
+                            "severity_reason": severity_reason,
+                            "row_missing_count": row_missing_count,
+                        }
+
+                        suspicious_examples_all.append(suspicious_record)
+
                         if len(suspicious_examples) < SUSPICIOUS_EXAMPLE_LIMIT:
-                            row_missing_count = sum(
-                                1 for column_name in columns
-                                if normalized_row.get(column_name, "") == ""
-                            )
-
-                            severity_score = min(100, (len(issues) * 30) + min(row_missing_count * 5, 40))
-
-                            if severity_score >= 80:
-                                severity_label = "critical"
-                            elif severity_score >= 60:
-                                severity_label = "high"
-                            elif severity_score >= 35:
-                                severity_label = "medium"
-                            else:
-                                severity_label = "low"
-
-                            severity_reason = (
-                                f"This cell has {len(issues)} suspicious signal"
-                                f"{'' if len(issues) == 1 else 's'}"
-                                f" and appears in a row with {row_missing_count} missing field"
-                                f"{'' if row_missing_count == 1 else 's'}."
-                            )
-
-                            suspicious_examples.append({
-                                "row_number": row_count,
-                                "column": column,
-                                "value": value,
-                                "issues": issues,
-                                "severity_score": severity_score,
-                                "severity_label": severity_label,
-                                "severity_reason": severity_reason,
-                                "row_missing_count": row_missing_count,
-                            })
+                            suspicious_examples.append(suspicious_record)
 
                 if row_count % 1000 == 0:
                     live_duplicate_candidates = sum(
@@ -1049,6 +1104,13 @@ def scan_csv(csv_path):
             suspicious_value_summary=suspicious_value_summary,
         )
 
+        review_index_summary = write_csv_review_index(
+            get_default_dtm_root(),
+            csv_path,
+            duplicate_groups_all,
+            suspicious_examples_all,
+        )
+
         emit_progress(
             rows_scanned=row_count,
             current_stage="finalizing_results",
@@ -1082,6 +1144,7 @@ def scan_csv(csv_path):
             "suggestions": suggestions,
             "data_quality_insights": data_quality_insights,
             "suspicious_value_summary": suspicious_value_summary,
+            "review_index": review_index_summary,
         }
 
     except Exception as error:

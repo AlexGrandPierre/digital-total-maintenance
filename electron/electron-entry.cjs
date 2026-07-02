@@ -15,6 +15,7 @@ function createWindow() {
   const iconPath = app.isPackaged
     ? path.join(process.resourcesPath, 'build', 'icon.png')
     : path.join(__dirname, '..', 'build', 'icon.png');
+
   const win = new BrowserWindow({
     width: 1440,
     height: 960,
@@ -796,12 +797,45 @@ app.whenReady().then(() => {
   ipcMain.handle('save-csv-review-session', async (_event, payload = {}) => {
     const sessionPath = getBundledPythonPath('csv_review_session');
   
+    const payloadPath = path.join(
+      getAppDataPath(),
+      `csv-review-session-save-${Date.now()}.json`
+    );
+  
+    fs.writeFileSync(payloadPath, JSON.stringify(payload), 'utf-8');
+  
     const result = await runPythonScript(sessionPath, [
       '--app-data',
       getAppDataPath(),
       '--dtm-root',
       getDtmDesktopRoot().root,
+      '--payload-file',
+      payloadPath,
       'save',
+    ]);
+  
+    try {
+      fs.unlinkSync(payloadPath);
+    } catch {}
+  
+    try {
+      return JSON.parse(result.output || '{}');
+    } catch {
+      return {
+        success: false,
+        message:
+          result.errorOutput ||
+          result.output ||
+          'Failed to save CSV review session.',
+      };
+    }
+  });
+
+  ipcMain.handle('load-more-duplicate-groups', async (_event, payload = {}) => {
+    const csvReviewIndexPath = getBundledPythonPath('csv_review_index');
+  
+    const result = await runPythonScript(csvReviewIndexPath, [
+      'duplicates',
       JSON.stringify(payload),
     ]);
   
@@ -813,7 +847,30 @@ app.whenReady().then(() => {
         message:
           result.errorOutput ||
           result.output ||
-          'Failed to save CSV review session.',
+          'Failed to parse duplicate review index result.',
+        items: [],
+      };
+    }
+  });
+  
+  ipcMain.handle('load-more-suspicious-values', async (_event, payload = {}) => {
+    const csvReviewIndexPath = getBundledPythonPath('csv_review_index');
+  
+    const result = await runPythonScript(csvReviewIndexPath, [
+      'suspicious',
+      JSON.stringify(payload),
+    ]);
+  
+    try {
+      return JSON.parse(result.output || '{}');
+    } catch {
+      return {
+        success: false,
+        message:
+          result.errorOutput ||
+          result.output ||
+          'Failed to parse suspicious review index result.',
+        items: [],
       };
     }
   });

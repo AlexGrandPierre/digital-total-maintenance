@@ -42,6 +42,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveCsvReviewSession: (payload) =>
     ipcRenderer.invoke('save-csv-review-session', payload),
 
+  loadMoreDuplicateGroups: (payload) =>
+    ipcRenderer.invoke('load-more-duplicate-groups', payload),
+  
+  loadMoreSuspiciousValues: (payload) =>
+    ipcRenderer.invoke('load-more-suspicious-values', payload),
+
   openDtmFolder: () => ipcRenderer.invoke('open-dtm-folder'),
 
   resetDatasetDecisions: (payload) =>

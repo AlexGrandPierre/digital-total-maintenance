@@ -290,6 +290,40 @@ interface ElectronAPI {
       history_entry?: ActionHistoryEntry;
     }>;
   }>;
+
+  loadMoreDuplicateGroups?: (payload: {
+    csv_path: string;
+    offset: number;
+    limit: number;
+    exclude_ids?: string[];
+  }) => Promise<{
+    success: boolean;
+    items: unknown[];
+    offset: number;
+    limit: number;
+    total: number;
+    remaining_total?: number;
+    next_offset: number;
+    has_more: boolean;
+    message?: string;
+  }>;
+  
+  loadMoreSuspiciousValues?: (payload: {
+    csv_path: string;
+    offset: number;
+    limit: number;
+    exclude_ids?: string[];
+  }) => Promise<{
+    success: boolean;
+    items: unknown[];
+    offset: number;
+    limit: number;
+    total: number;
+    remaining_total?: number;
+    next_offset: number;
+    has_more: boolean;
+    message?: string;
+  }>;
 }
 
 interface Window {

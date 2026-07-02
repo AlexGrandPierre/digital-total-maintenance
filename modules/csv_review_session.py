@@ -89,12 +89,18 @@ def save_session(app_data_path, payload):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--app-data", required=True)
+    parser.add_argument("--dtm-root", required=False)
     parser.add_argument("action", choices=["load", "save"])
     parser.add_argument("payload_json", nargs="?", default="{}")
+    parser.add_argument("--payload-file", required=False)
     args = parser.parse_args()
 
     try:
-        payload = json.loads(args.payload_json)
+        if args.payload_file:
+            with open(args.payload_file, "r", encoding="utf-8") as file:
+                payload = json.load(file)
+        else:
+            payload = json.loads(args.payload_json)
 
         if args.action == "load":
             csv_path = payload.get("csv_path", "")
