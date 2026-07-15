@@ -3,6 +3,7 @@ import csv
 import json
 import os
 from datetime import datetime
+from csv_review_index import get_index_file
 
 
 def ensure_export_dir(app_data_path):
@@ -22,6 +23,45 @@ def safe_filename(name):
         char if char.isalnum() or char in ("-", "_") else "_"
         for char in name
     ).strip("_")
+
+def read_jsonl_all(path):
+    items = []
+
+    if not path.exists():
+        return items
+
+    with open(path, "r", encoding="utf-8") as file:
+        for line in file:
+            if not line.strip():
+                continue
+
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            if isinstance(item, dict):
+                items.append(item)
+
+    return items
+
+def load_full_review_indexes(csv_path, dtm_root=None):
+    duplicate_index_path = get_index_file(
+        csv_path,
+        "duplicates",
+        dtm_root,
+    )
+
+    suspicious_index_path = get_index_file(
+        csv_path,
+        "suspicious",
+        dtm_root,
+    )
+
+    return {
+        "duplicate_groups": read_jsonl_all(duplicate_index_path),
+        "suspicious_examples": read_jsonl_all(suspicious_index_path),
+    }
 
 
 def read_csv_rows(csv_path):
@@ -69,12 +109,6 @@ def export_duplicate_groups(app_data_path, csv_path, duplicate_groups, dataset_d
     export_rows = []
 
     dataset_decisions = dataset_decisions or {}
-
-    for group_index, group in enumerate(duplicate_groups, start=1):
-        decision = dataset_decisions.get(group.get("group_id"), {}).get("decision", "pending")
-
-        if decision in {"legitimate_records", "ignored"}:
-            continue
 
     for group_index, group in enumerate(duplicate_groups, start=1):
         group_id = group.get("group_id", f"group_{group_index}")
@@ -460,7 +494,7 @@ def export_suspicious_rows_by_decision(
     }
 
 
-def run_action(app_data_path, payload):
+def run_action(app_data_path, payload, dtm_root=None):
     action = payload.get("action")
     csv_path = payload.get("csv_path")
 
@@ -469,12 +503,38 @@ def run_action(app_data_path, payload):
             "success": False,
             "message": f"CSV file does not exist: {csv_path}",
         }
+    
+    review_indexes = load_full_review_indexes(
+        csv_path,
+        dtm_root,
+    )
+
+    full_duplicate_groups = review_indexes["duplicate_groups"]
+    full_suspicious_examples = review_indexes["suspicious_examples"]
+
+    duplicate_groups = (
+        full_duplicate_groups
+        if full_duplicate_groups
+        else payload.get("duplicate_groups", [])
+    )
+
+    suspicious_examples = (
+        full_suspicious_examples
+        if full_suspicious_examples
+        else payload.get("suspicious_examples", [])
+    )
+
+    suspicious_row_numbers = sorted({
+        example.get("row_number")
+        for example in suspicious_examples
+        if isinstance(example.get("row_number"), int)
+    })
 
     if action == "export_duplicate_groups":
         return export_duplicate_groups(
             app_data_path=app_data_path,
             csv_path=csv_path,
-            duplicate_groups=payload.get("duplicate_groups", []),
+            duplicate_groups=duplicate_groups,
             dataset_decisions=payload.get("dataset_decisions", {}),
         )
 
@@ -482,18 +542,18 @@ def run_action(app_data_path, payload):
         return export_suspicious_rows(
             app_data_path=app_data_path,
             csv_path=csv_path,
-            suspicious_examples=payload.get("suspicious_examples", []),
-            suspicious_row_numbers=payload.get("suspicious_row_numbers", []),
+            suspicious_examples=suspicious_examples,
+            suspicious_row_numbers=suspicious_row_numbers,
         )
 
     if action == "export_clean_copy":
         return export_clean_copy(
             app_data_path=app_data_path,
             csv_path=csv_path,
-            duplicate_groups=payload.get("duplicate_groups", []),
+            duplicate_groups=duplicate_groups,
             duplicate_row_numbers_to_exclude=payload.get("duplicate_row_numbers_to_exclude", []),
-            suspicious_examples=payload.get("suspicious_examples", []),
-            suspicious_row_numbers=payload.get("suspicious_row_numbers", []),
+            suspicious_examples=suspicious_examples,
+            suspicious_row_numbers=suspicious_row_numbers,
             dataset_decisions=payload.get("dataset_decisions", {}),
             remove_empty_columns=payload.get("remove_empty_columns", True),
             remove_empty_rows=payload.get("remove_empty_rows", True),
@@ -506,7 +566,7 @@ def run_action(app_data_path, payload):
         return export_duplicate_groups_by_decision(
             app_data_path=app_data_path,
             csv_path=csv_path,
-            duplicate_groups=payload.get("duplicate_groups", []),
+            duplicate_groups=duplicate_groups,
             dataset_decisions=payload.get("dataset_decisions", {}),
             target_decision="approved_duplicate",
             export_label="approved_duplicates",
@@ -516,7 +576,7 @@ def run_action(app_data_path, payload):
         return export_duplicate_groups_by_decision(
             app_data_path=app_data_path,
             csv_path=csv_path,
-            duplicate_groups=payload.get("duplicate_groups", []),
+            duplicate_groups=duplicate_groups,
             dataset_decisions=payload.get("dataset_decisions", {}),
             target_decision="needs_review",
             export_label="duplicate_needs_review",
@@ -563,7 +623,11 @@ def main():
         else:
             raise ValueError("No CSV action payload was provided.")
 
-        result = run_action(args.app_data, payload)
+        result = run_action(
+            args.app_data,
+            payload,
+            args.dtm_root,
+        )
         print(json.dumps(result))
     except Exception as error:
         print(json.dumps({
