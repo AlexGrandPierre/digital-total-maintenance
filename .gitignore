@@ -28,6 +28,8 @@ __pycache__/
 # macOS metadata
 .DS_Store
 
+/data/
+
 # Root-level PyInstaller specs generated during ad-hoc builds
 /*.spec
 
