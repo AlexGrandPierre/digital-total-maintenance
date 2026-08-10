@@ -12,6 +12,25 @@ dist
 dist-ssr
 *.local
 
+# Dependencies
+node_modules/
+
+# Frontend / Electron build output
+dist/
+
+# PyInstaller generated build output
+build/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# macOS metadata
+.DS_Store
+
+# Root-level PyInstaller specs generated during ad-hoc builds
+/*.spec
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
