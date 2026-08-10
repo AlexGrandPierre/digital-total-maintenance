@@ -64,15 +64,15 @@
         "to": "bundled-python"
       },
       {
-        "from": "build/icon.png",
-        "to": "build/icon.png"
+        "from": "assets/app-icon/icon.png",
+        "to": "assets/app-icon/icon.png"
       }
     ],
     "mac": {
       "target": "dmg",
       "category": "public.app-category.productivity",
       "identity": null,
-      "icon": "build/icon.icns"
+      "icon": "assets/app-icon/icon.icns"
     }
   }
 }
