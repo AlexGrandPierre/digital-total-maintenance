@@ -1,7 +1,7 @@
 {
   "name": "digital-total-maintenance",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.7",
   "description": "Local-first digital maintenance and dataset remediation workspace.",
   "type": "module",
   "main": "electron/electron-entry.cjs",

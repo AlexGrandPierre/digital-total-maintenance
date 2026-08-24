@@ -1,8 +1,49 @@
+/**
+ * electron-entry.cjs
+ *
+ * Main Electron process for Digital Total Maintenance.
+ *
+ * Responsibilities:
+ * - Create and manage the desktop window
+ * - Register IPC handlers
+ * - Launch bundled Python utilities
+ * - Coordinate filesystem actions
+ * - Coordinate CSV review workflows
+ * - Manage local application paths
+ *
+ * This module DOES NOT:
+ * - Implement scan logic
+ * - Implement filesystem operations
+ * - Implement CSV algorithms
+ *
+ * Called by:
+ * Electron application startup.
+ *
+ * Coordinates:
+ * React ↔ Electron ↔ Python.
+ */
+
+// ============================================================================
+// Future Refactor
+//
+// IPC handlers may eventually migrate into dedicated registration modules:
+//
+// ipc/filesystem.cjs
+// ipc/history.cjs
+// ipc/csv.cjs
+//
+// while preserving electron-entry.cjs as the Electron bootstrap.
+// ============================================================================
+
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
 
+
+// ============================================================================
+// Electron Runtime Helpers
+// ============================================================================
 function getBundledPythonPath(name) {
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'bundled-python', name);
@@ -13,8 +54,8 @@ function getBundledPythonPath(name) {
 
 function createWindow() {
   const iconPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'build', 'icon.png')
-    : path.join(__dirname, '..', 'build', 'icon.png');
+    ? path.join(process.resourcesPath, 'assets', 'app-icon', 'icon.png')
+    : path.join(__dirname, '..', 'assets', 'app-icon', 'icon.png');
 
   const win = new BrowserWindow({
     width: 1440,
@@ -142,9 +183,16 @@ function getDtmDesktopRoot() {
   };
 }
 
+
+// ============================================================================
+// Electron Application Lifecycle
+// ============================================================================
 app.whenReady().then(() => {
   createWindow();
 
+  // ============================================================================
+  // Filesystem Scan
+  // ============================================================================
   ipcMain.on('scan-desktop', (event, payload = {}) => {
     const preset = payload.preset || 'test';
     const customPath = (payload.customPath || '').trim();
@@ -402,6 +450,9 @@ app.whenReady().then(() => {
     });
   });
 
+  // ============================================================================
+  // Browsing and Workspace Access
+  // ============================================================================
   ipcMain.handle('browse-for-folder', async () => {
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory'],
@@ -444,7 +495,13 @@ app.whenReady().then(() => {
     };
   });
 
+
+  // ============================================================================
+  // Filesystem Actions
+  // ============================================================================
   ipcMain.handle('move-to-review', async (_event, payload = {}) => {
+    const reviewActionPath = getBundledPythonPath('review_action');
+
     const filePath = payload.filePath;
     const filePaths = payload.filePaths || [];
     const mode = payload.mode || 'single';
@@ -520,7 +577,7 @@ app.whenReady().then(() => {
     const mode = payload.mode || 'single';
     const actionTarget = mode === 'batch' ? JSON.stringify(filePaths) : filePath;
 
-    if (!filePath) {
+    if (mode !== 'batch' && !filePath) {
       return {
         success: false,
         message: 'No file path provided.',
@@ -546,6 +603,10 @@ app.whenReady().then(() => {
     }
   });
 
+
+  // ============================================================================
+  // Action History
+  // ============================================================================
   ipcMain.handle('get-action-history', async (_event, payload = {}) => {
     const limit = Number(payload.limit || 20);
     const historyPath = getBundledPythonPath('action_history');
@@ -618,6 +679,10 @@ app.whenReady().then(() => {
     }
   });
 
+
+  // ============================================================================
+  // CSV Export and Processing
+  // ============================================================================
   ipcMain.handle('csv-action', async (_event, payload = {}) => {
     const csvActionPath = getBundledPythonPath('csv_action');
   
@@ -661,6 +726,10 @@ app.whenReady().then(() => {
     }
   });
 
+
+  // ============================================================================
+  // Workspace Utilities
+  // ============================================================================
   ipcMain.handle('open-dtm-folder', async () => {
     try {
       const root = getDtmDesktopRoot().root;
@@ -700,6 +769,10 @@ app.whenReady().then(() => {
     }
   });
 
+
+  // ============================================================================
+  // CSV Review Persistence
+  // ============================================================================
   ipcMain.handle('get-dataset-decisions', async () => {
     const decisionPath = getBundledPythonPath('dataset_decision');
   
@@ -831,6 +904,10 @@ app.whenReady().then(() => {
     }
   });
 
+
+  // ============================================================================
+  // CSV Review Pagination
+  // ============================================================================
   ipcMain.handle('load-more-duplicate-groups', async (_event, payload = {}) => {
     const csvReviewIndexPath = getBundledPythonPath('csv_review_index');
   
@@ -875,6 +952,10 @@ app.whenReady().then(() => {
     }
   });
 
+
+  // ============================================================================
+  // Batch Operations
+  // ============================================================================
   ipcMain.handle('bulk-file-action', async (_event, payload = {}) => {
     const batchActionPath = getBundledPythonPath('batch_action');
   

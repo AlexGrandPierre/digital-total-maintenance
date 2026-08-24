@@ -1,3 +1,49 @@
+"""
+scan.py
+
+Local filesystem analysis engine for Digital Total Maintenance.
+
+Responsibilities:
+- Scan local folders safely
+- Classify files using deterministic signals
+- Infer file and location context
+- Recommend review, archive, remove, keep, or ignore actions
+- Rank maintenance queues
+- Detect filename-based duplicate groups
+- Summarize scan patterns and filesystem errors
+
+This module DOES NOT:
+- Move, archive, trash, or restore files
+- Persist action history
+- Scan CSV datasets
+- Automatically delete user content
+
+Called by:
+Electron IPC → filesystem scan
+
+Outputs:
+Structured scan results consumed by the Local File Review workspace.
+"""
+
+# =============================================================================
+# Future Refactor
+# =============================================================================
+#
+# This module currently combines:
+#
+# • File classification
+# • Context inference
+# • Queue recommendation logic
+# • Duplicate detection
+# • Ranking and scan insights
+# • Filesystem traversal
+#
+# These responsibilities should eventually migrate into focused filesystem/
+# modules while preserving scan_folder() as the public scan API.
+#
+# =============================================================================
+
+
 import os
 import json
 import sys
@@ -6,11 +52,12 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+
+# =============================================================================
+# Configuration and File Taxonomy
+# =============================================================================
 DEFAULT_TARGET = str(Path.home())
 
-# -----------------------------
-# Safety / scale configuration
-# -----------------------------
 MAX_REVIEW_ITEMS = 100
 MAX_ARCHIVE_ITEMS = 100
 MAX_REMOVE_ITEMS = 100
@@ -24,6 +71,7 @@ EXCLUDED_DIR_NAMES = {
     "node_modules",
     ".git",
     ".Trash",
+    "Digital Total Maintenance",
     "DTM Review",
     "DTM Archive",
     "__pycache__",
@@ -105,6 +153,9 @@ OPAQUE_DATA_EXTS = {
 }
 
 
+# =============================================================================
+# Progress and General Helpers
+# =============================================================================
 def emit_progress(payload: dict) -> None:
     print(json.dumps({"type": "progress", **payload}), flush=True)
 
@@ -128,6 +179,9 @@ def is_root_or_system_heavy_target(target_dir: str) -> bool:
     return normalized in {"/", str(Path.home().resolve())}
 
 
+# =============================================================================
+# Location and File Context
+# =============================================================================
 def build_location_context_config() -> dict:
     home = str(Path.home().resolve())
     desktop = str((Path.home() / "Desktop").resolve())
@@ -145,6 +199,13 @@ def build_location_context_config() -> dict:
 
 
 def get_location_context(normalized_path: str, context_config: dict) -> str:
+    # Current DTM workspace layout: <dtm_root>/Review and <dtm_root>/Archive.
+    if "/digital total maintenance/review/" in normalized_path:
+        return "dtm_review_managed"
+    if "/digital total maintenance/archive/" in normalized_path:
+        return "dtm_archive_managed"
+
+    # Legacy layout retained so previously filed files stay recognized.
     if "/dtm review/" in normalized_path:
         return "dtm_review_managed"
     if "/dtm archive/" in normalized_path:
@@ -343,6 +404,10 @@ def infer_file_context(
         "context_reason": "This file has some recognizable properties, but its practical role remains context-dependent.",
     }
 
+
+# =============================================================================
+# Queue Recommendation Engine
+# =============================================================================
 def infer_queue_decision(
     *,
     file_kind: str,
@@ -478,7 +543,7 @@ def infer_queue_decision(
             if age_days > 180:
                 return {
                     "recommended_action": "archive",
-                    "classification_reason": "Low-relevance structured file stored outside user-facing areas; likely support or stale data rather than active content.",
+                    "suggested_action_reason": "Low-relevance structured file stored outside user-facing areas; likely support or stale data rather than active content.",
                 }
             return {
                 "recommended_action": "ignore",
@@ -605,6 +670,9 @@ def compute_action_confidence(entry: dict) -> str:
     return "medium"
 
 
+# =============================================================================
+# Classification Explanation Helpers
+# =============================================================================
 def get_known_type_explanation(ext: str, file_kind: str) -> str:
     if file_kind == "system_metadata":
         return "Operating system metadata or internal support file."
@@ -715,6 +783,10 @@ def infer_extensionless_role(filename: str, location_context: str) -> dict | Non
 
     return None
 
+
+# =============================================================================
+# Review Prioritization and Context Enrichment
+# =============================================================================
 def infer_review_priority(
     *,
     file_kind: str,
@@ -840,6 +912,10 @@ def with_context(
         "review_priority_reason": review_priority_reason,
     }
 
+
+# =============================================================================
+# File Classification Engine
+# =============================================================================
 def classify_file(
     filename: str,
     normalized_path: str,
@@ -1296,23 +1372,23 @@ def classify_file(
                 inferred["suggested_action_reason"] = "Extensionless file in a non-user-facing location is likely system or support material."
                 
             return with_context(
-            filename=filename,
-            normalized_path=normalized_path,
-            age_days=age_days,
-            location_context=location_context,
-            base={
-                    "file_kind": inferred["file_kind"],
-                    "category": inferred["category"],
-                    "known_type_explanation": inferred["known_type_explanation"],
-                    "classification_reason": inferred["classification_reason"],
-                    "confidence": inferred["confidence"],
-                    "confidence_reason": inferred["confidence_reason"],
-                    "recommended_action": inferred["recommended_action"],
-                    "suggested_action_reason": inferred["suggested_action_reason"],
-                    "reason": inferred["reason"],
-                    "risk_flags": inferred["risk_flags"],
-                    "ui_visibility": "normal",
-                },
+                filename=filename,
+                normalized_path=normalized_path,
+                age_days=age_days,
+                location_context=location_context,
+                base={
+                        "file_kind": inferred["file_kind"],
+                        "category": inferred["category"],
+                        "known_type_explanation": inferred["known_type_explanation"],
+                        "classification_reason": inferred["classification_reason"],
+                        "confidence": inferred["confidence"],
+                        "confidence_reason": inferred["confidence_reason"],
+                        "recommended_action": inferred["recommended_action"],
+                        "suggested_action_reason": inferred["suggested_action_reason"],
+                        "reason": inferred["reason"],
+                        "risk_flags": inferred["risk_flags"],
+                        "ui_visibility": "normal",
+                    },
             )
 
         low_conf = build_low_confidence_explanation(
@@ -1364,6 +1440,9 @@ def classify_file(
     )
 
 
+# =============================================================================
+# Bounded Collection Helpers and Duplicate Detection
+# =============================================================================
 def maybe_append(bucket: list, item, cap: int) -> None:
     if len(bucket) < cap:
         bucket.append(item)
@@ -1441,6 +1520,10 @@ def build_duplicate_groups(duplicate_candidates: dict, cap: int) -> tuple[list, 
     total = sum(1 for items in duplicate_candidates.values() if len(items) >= 2)
     return groups, total
 
+
+# =============================================================================
+# Error Handling and Classification Contracts
+# =============================================================================
 def categorize_scan_error(error: Exception) -> dict:
     message = str(error).strip() or error.__class__.__name__
     lowered = message.lower()
@@ -1537,6 +1620,10 @@ def ensure_classification_contract(classification: dict | None, location_context
         "ui_visibility": classification.get("ui_visibility", "normal"),
     }
 
+
+# =============================================================================
+# Queue Ranking
+# =============================================================================
 def priority_score(value: str | None) -> int:
     if value == "high":
         return 3
@@ -1623,6 +1710,10 @@ def rank_system_item(item: dict) -> tuple:
 def top_ranked(items: list, cap: int, ranker) -> list:
     return sorted(items, key=ranker, reverse=True)[:cap]
 
+
+# =============================================================================
+# Scan Insights and Pattern Previews
+# =============================================================================
 def summarize_queue(items: list, key: str, limit: int = 5) -> list:
     counts = {}
 
@@ -1720,28 +1811,31 @@ def build_pattern_previews(
     previews = {}
 
     for item in review_context_summary:
-      value = item["label"]
-      previews[make_pattern_key("context_type", value)] = build_pattern_preview_for_filter(
-          review_items=review_items,
-          archive_items=archive_items,
-          remove_items=remove_items,
-          key="context_type",
-          value=value,
-      )
+        value = item["label"]
+        previews[make_pattern_key("context_type", value)] = build_pattern_preview_for_filter(
+            review_items=review_items,
+            archive_items=archive_items,
+            remove_items=remove_items,
+            key="context_type",
+            value=value,
+        )
 
     for item in top_review_reasons:
-      value = item["label"]
-      previews[make_pattern_key("reason", value)] = build_pattern_preview_for_filter(
-          review_items=review_items,
-          archive_items=archive_items,
-          remove_items=remove_items,
-          key="reason",
-          value=value,
-      )
+        value = item["label"]
+        previews[make_pattern_key("reason", value)] = build_pattern_preview_for_filter(
+            review_items=review_items,
+            archive_items=archive_items,
+            remove_items=remove_items,
+            key="reason",
+            value=value,
+        )
 
     return previews
 
 
+# =============================================================================
+# Filesystem Scan Engine
+# =============================================================================
 def scan_folder(target_dir: str) -> dict:
     target_dir = normalize_target(target_dir)
     started_at = time.time()
@@ -2046,6 +2140,9 @@ def scan_folder(target_dir: str) -> dict:
     return result
 
 
+# =============================================================================
+# CLI Entry Point
+# =============================================================================
 if __name__ == "__main__":
     target = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_TARGET
     result = scan_folder(target)

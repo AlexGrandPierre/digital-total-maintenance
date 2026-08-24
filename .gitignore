@@ -21,6 +21,9 @@ dist/
 # PyInstaller generated build output
 build/
 
+# Compiled Python engine binaries (regenerate with scripts/build-python.sh)
+bundled-python/
+
 # Python cache
 __pycache__/
 *.pyc
