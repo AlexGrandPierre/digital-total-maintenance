@@ -1,7 +1,7 @@
 # Digital Total Maintenance (DTM)
 
 > Clean Machines. Clear Minds.
-> A local-first decision engine for digital environments.
+> A local-first investigation and decision engine for digital environments.
 
 **Status:** Active Development (Beta)
 
@@ -12,10 +12,11 @@
 **License:** All Rights Reserved (currently under active development)
 
 
+Digital Total Maintenance helps people understand, investigate, and maintain complex digital environments without surrendering judgment to automation.
 
-Digital Total Maintenance helps people understand, review, and safely manage digital clutter without surrendering control to automated deletion.
+DTM surfaces evidence, explains recommendations, preserves human decisions, and turns maintenance work into durable knowledge about the systems being reviewed.
 
-Instead of deciding for the user, DTM surfaces evidence, explains recommendations, and keeps every action reversible.
+The current beta applies this approach to local file management and structured dataset review.
 
 <img width="1276" height="499" alt="Screenshot 2026-07-06 at 4 46 11 AM" src="https://github.com/user-attachments/assets/ddcaaa06-a619-4f84-aff6-130076a53ee5" />
 
@@ -67,6 +68,10 @@ Actions can always be undone.
 ### Bounded
 
 Large datasets are processed in safe, reviewable batches.
+
+### Traceable
+
+Findings and decisions remain connected to the evidence and reasoning that produced them.
 
 
 
