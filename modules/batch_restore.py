@@ -1,3 +1,28 @@
+"""
+batch_restore.py
+
+Batch restore engine for Digital Total Maintenance.
+
+Responsibilities:
+- Execute bulk restore operations
+- Coordinate multiple restore actions
+- Record restore history
+- Produce batch restore summaries
+
+This module DOES NOT:
+- Classify files
+- Scan folders
+- Decide which files should be restored
+- Perform archive, review, or trash actions
+
+Called by:
+Electron IPC batch restore actions.
+
+Outputs:
+Structured batch restore results and per-file restore outcomes.
+"""
+
+
 import argparse
 import json
 import shutil
@@ -7,6 +32,9 @@ from typing import Any
 from action_history import append_action_history
 
 
+# =============================================================================
+# Configuration
+# =============================================================================
 RESTORABLE_ACTIONS = {
     "move_to_review": "restore_from_review",
     "move_to_archive": "restore_from_archive",
@@ -14,6 +42,9 @@ RESTORABLE_ACTIONS = {
 }
 
 
+# =============================================================================
+# Restore Utility Helpers
+# =============================================================================
 def safe_result(success: bool, message: str, **extra: Any) -> dict:
     return {"success": success, "message": message, **extra}
 
@@ -33,6 +64,9 @@ def unique_restore_target(original_location: Path) -> Path:
         counter += 1
 
 
+# =============================================================================
+# Batch Restore Execution
+# =============================================================================
 def restore_one_entry(entry: dict) -> dict:
     if not isinstance(entry, dict):
         return safe_result(False, "Invalid history entry.")
@@ -89,14 +123,14 @@ def restore_one_entry(entry: dict) -> dict:
 
     try:
         original_location.parent.mkdir(parents=True, exist_ok=True)
-        restore_target = unique_restore_target(original_location)
+        restore_destination = unique_restore_target(original_location)
 
-        shutil.move(str(current_location), str(restore_target))
+        shutil.move(str(current_location), str(restore_destination))
 
         history_entry = append_action_history(
             action=restore_action_name,
             source_path=str(current_location),
-            destination_path=str(restore_target),
+            destination_path=str(restore_destination),
             mode=mode,
             status="success",
             reverts_history_id=entry.get("id"),
@@ -108,8 +142,8 @@ def restore_one_entry(entry: dict) -> dict:
             action=restore_action_name,
             path=str(current_location),
             source_path=str(current_location),
-            destination=str(restore_target),
-            destination_path=str(restore_target),
+            destination=str(restore_destination),
+            destination_path=str(restore_destination),
             restored_from_history_id=entry.get("id"),
             history_entry=history_entry,
         )
@@ -177,6 +211,9 @@ def run_batch_restore(payload: dict) -> dict:
     }
 
 
+# =============================================================================
+# Payload Loading
+# =============================================================================
 def load_payload(args: argparse.Namespace) -> dict:
     if args.payload_file:
         with open(args.payload_file, "r", encoding="utf-8") as file:
@@ -188,6 +225,9 @@ def load_payload(args: argparse.Namespace) -> dict:
     return {}
 
 
+# =============================================================================
+# CLI Entry Point
+# =============================================================================
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--app-data", required=True)

@@ -1,10 +1,27 @@
-type Props = {
+/**
+ * ScanButton.tsx
+ *
+ * Reusable scan action button.
+ *
+ * Responsibilities:
+ * - Trigger a scan request
+ * - Display scanning state
+ * - Prevent duplicate scan submissions while a scan is active
+ *
+ * This component contains no scan logic.
+ */
+
+type ScanButtonProps = {
   onClick: () => void;
   isScanning?: boolean;
   label?: string;
 };
 
-function ScanButton({ onClick, isScanning = false, label = 'Scan Folder' }: Props) {
+function ScanButton({
+  onClick,
+  isScanning = false,
+  label = 'Scan Folder',
+}: ScanButtonProps) {
   return (
     <button
       onClick={onClick}

@@ -1,3 +1,27 @@
+"""
+action_history.py
+
+Persistent action history for Digital Total Maintenance.
+
+Responsibilities:
+- Record file operations
+- Store undo history
+- Retrieve recent actions
+- Limit history growth
+
+This module DOES NOT:
+- Perform filesystem actions
+- Restore files
+- Archive files
+- Review CSV datasets
+
+Called by:
+Filesystem action modules and Electron IPC.
+
+Outputs:
+Persistent JSON action history used by the History workspace.
+"""
+
 import json
 import sys
 import uuid
@@ -6,9 +30,15 @@ from datetime import datetime, timezone
 from typing import Optional
 
 
+# =============================================================================
+# Configuration
+# =============================================================================
 MAX_HISTORY_ITEMS = 1000
 
 
+# =============================================================================
+# Argument Parsing
+# =============================================================================
 def parse_paths_from_args(args: list[str]) -> dict:
     parsed = {
         "app_data": None,
@@ -37,6 +67,9 @@ def parse_paths_from_args(args: list[str]) -> dict:
     return parsed
 
 
+# =============================================================================
+# History File Helpers
+# =============================================================================
 def get_dtm_root() -> Path:
     parsed = parse_paths_from_args(sys.argv[1:])
 
@@ -52,6 +85,9 @@ def get_history_file() -> Path:
     return history_dir / "action-history.json"
 
 
+# =============================================================================
+# History Persistence
+# =============================================================================
 def _read_history() -> list:
     history_file = get_history_file()
 
@@ -67,12 +103,12 @@ def _read_history() -> list:
         return []
 
 
-def _write_history(items: list) -> None:
+def _write_history(history_items: list) -> None:
     history_file = get_history_file()
     history_file.parent.mkdir(parents=True, exist_ok=True)
 
     with history_file.open("w", encoding="utf-8") as f:
-        json.dump(items[:MAX_HISTORY_ITEMS], f, indent=2)
+        json.dump(history_items[:MAX_HISTORY_ITEMS], f, indent=2)
 
 
 def append_action_history(
@@ -113,6 +149,9 @@ def get_action_history(limit=None) -> list:
     return history[: max(0, limit)]
 
 
+# =============================================================================
+# Command Line Entry Point
+# =============================================================================
 if __name__ == "__main__":
     parsed = parse_paths_from_args(sys.argv[1:])
     args = parsed["remaining"]

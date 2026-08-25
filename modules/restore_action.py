@@ -1,3 +1,27 @@
+"""
+restore_action.py
+
+Restore execution layer for Digital Total Maintenance.
+
+Responsibilities:
+- Restore files from previous DTM move actions
+- Reconstruct original filesystem destinations
+- Prevent filename collisions during restoration
+- Record successful restores in action history
+
+This module DOES NOT:
+- Classify files
+- Decide whether a file should be restored
+- Permanently delete files
+- Restore actions that were not recorded by DTM
+
+Called by:
+Electron IPC and action-history workflows.
+
+Outputs:
+Structured restore results including restored paths and history entries.
+"""
+
 import sys
 import json
 import shutil
@@ -5,6 +29,10 @@ from pathlib import Path
 from datetime import datetime, timezone
 from action_history import append_action_history
 
+
+# =============================================================================
+# Argument Parsing
+# =============================================================================
 def parse_args(args: list[str]) -> dict:
     parsed = {
         "app_data": None,
@@ -32,6 +60,10 @@ def parse_args(args: list[str]) -> dict:
 
     return parsed
 
+
+# =============================================================================
+# Restore Execution
+# =============================================================================
 def restore_from_history(entry: dict) -> dict:
     action = entry.get("action")
     source_path = entry.get("source_path")
@@ -73,6 +105,7 @@ def restore_from_history(entry: dict) -> dict:
 
     original_location.parent.mkdir(parents=True, exist_ok=True)
 
+    # Resolve a collision-safe restore destination.
     restore_target = original_location
 
     if restore_target.exists():
@@ -117,6 +150,10 @@ def restore_from_history(entry: dict) -> dict:
         "history_entry": history_entry,
     }
 
+
+# =============================================================================
+# CLI Entry Point
+# =============================================================================
 if __name__ == "__main__":
     parsed = parse_args(sys.argv[1:])
     args = parsed["remaining"]

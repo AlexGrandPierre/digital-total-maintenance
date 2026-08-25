@@ -1,10 +1,28 @@
+"""
+csv_review_session.py
+
+Persistent storage layer for CSV review workspaces.
+
+Responsibilities:
+- Generate stable session identifiers
+- Load saved review sessions
+- Save duplicate and suspicious-value decisions
+- Provide a CLI interface for Electron
+
+This module intentionally contains no review logic.
+It only persists and retrieves session data.
+"""
+
 import argparse
 import hashlib
 import json
 import os
+
 from datetime import datetime
 
-
+# =============================================================================
+# Session Directory Helpers
+# =============================================================================
 def get_sessions_dir(app_data_path):
     sessions_dir = os.path.join(app_data_path, "csv-review-sessions")
     os.makedirs(sessions_dir, exist_ok=True)
@@ -20,7 +38,9 @@ def get_session_path(app_data_path, csv_path):
     session_id = get_session_id(csv_path)
     return os.path.join(get_sessions_dir(app_data_path), f"{session_id}.json")
 
-
+# =============================================================================
+# Session Creation
+# =============================================================================
 def empty_session(csv_path):
     return {
         "csv_path": csv_path,
@@ -30,18 +50,20 @@ def empty_session(csv_path):
         "suspicious_decisions": {},
     }
 
-
+# =============================================================================
+# Session Persistence
+# =============================================================================
 def load_session(app_data_path, csv_path):
-    path = get_session_path(app_data_path, csv_path)
+    session_path = get_session_path(app_data_path, csv_path)
 
-    if not os.path.exists(path):
+    if not os.path.exists(session_path):
         return {
             "success": True,
             "session": empty_session(csv_path),
         }
 
     try:
-        with open(path, "r", encoding="utf-8") as file:
+        with open(session_path, "r", encoding="utf-8") as file:
             session = json.load(file)
 
         return {
@@ -65,7 +87,7 @@ def save_session(app_data_path, payload):
             "message": "No CSV path provided.",
         }
 
-    session = {
+    session_data = {
         "csv_path": csv_path,
         "session_id": get_session_id(csv_path),
         "last_updated": datetime.now().isoformat(),
@@ -73,19 +95,21 @@ def save_session(app_data_path, payload):
         "suspicious_decisions": payload.get("suspicious_decisions", {}),
     }
 
-    path = get_session_path(app_data_path, csv_path)
+    session_path = get_session_path(app_data_path, csv_path)
 
-    with open(path, "w", encoding="utf-8") as file:
-        json.dump(session, file, indent=2)
+    with open(session_path, "w", encoding="utf-8") as file:
+        json.dump(session_data, file, indent=2)
 
     return {
         "success": True,
         "message": "Saved CSV review session.",
-        "session": session,
-        "path": path,
+        "session": session_data,
+        "path": session_path,
     }
 
-
+# =============================================================================
+# Command Line Entry Point
+# =============================================================================
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--app-data", required=True)

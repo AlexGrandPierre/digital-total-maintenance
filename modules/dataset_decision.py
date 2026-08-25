@@ -1,34 +1,64 @@
+"""
+dataset_decision.py
+
+Persistent duplicate-decision storage for Digital Total Maintenance.
+
+Responsibilities:
+- Store duplicate-group decisions
+- Retrieve saved dataset decisions
+- Reset decisions for a specific CSV dataset
+- Validate supported decision states
+
+This module DOES NOT:
+- Detect duplicate groups
+- Scan CSV datasets
+- Export CSV files
+- Persist suspicious-value decisions
+
+Called by:
+Electron IPC duplicate-review workflows.
+
+Outputs:
+Structured decision results backed by local JSON persistence.
+"""
+
 import argparse
 import json
 import os
 from datetime import datetime
 
 
+# =============================================================================
+# Decision Storage Helpers
+# =============================================================================
 def get_decision_path(app_data_path):
     os.makedirs(app_data_path, exist_ok=True)
     return os.path.join(app_data_path, "dataset-decisions.json")
 
 
 def read_decisions(app_data_path):
-    path = get_decision_path(app_data_path)
+    decision_path = get_decision_path(app_data_path)
 
-    if not os.path.exists(path):
+    if not os.path.exists(decision_path):
         return {}
 
     try:
-        with open(path, "r", encoding="utf-8") as file:
+        with open(decision_path, "r", encoding="utf-8") as file:
             return json.load(file)
     except Exception:
         return {}
 
 
 def write_decisions(app_data_path, decisions):
-    path = get_decision_path(app_data_path)
+    decision_path = get_decision_path(app_data_path)
 
-    with open(path, "w", encoding="utf-8") as file:
+    with open(decision_path, "w", encoding="utf-8") as file:
         json.dump(decisions, file, indent=2)
 
 
+# =============================================================================
+# Decision Persistence
+# =============================================================================
 def save_decision(app_data_path, payload):
     group_id = payload.get("group_id")
     decision = payload.get("decision")
@@ -98,6 +128,9 @@ def reset_decisions_for_csv(app_data_path, payload):
     }
 
 
+# =============================================================================
+# CLI Entry Point
+# =============================================================================
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--app-data", required=True)

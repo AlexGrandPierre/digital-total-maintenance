@@ -1,15 +1,29 @@
-import logo from '../assets/icon.png';
+/**
+ * Header.tsx
+ *
+ * Primary application header for Digital Total Maintenance.
+ *
+ * Responsibilities:
+ * - Display DTM branding
+ * - Present the application purpose
+ * - Surface the current scan status
+ *
+ * This component contains no scan or application logic.
+ */
+
+import logo from '../../assets/app-icon/icon.png';
+
+type HeaderProps = {
+  isScanning: boolean;
+};
 
 export default function Header({
   isScanning,
-}: {
-  isScanning: boolean;
-}) {
+}: HeaderProps) {
   return (
     <header className="rounded-[2rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex items-center gap-5">
-
           <img
             src={logo}
             alt="Digital Total Maintenance logo"
@@ -29,7 +43,6 @@ export default function Header({
               Bounded, explainable, reversible cleanup for complex digital environments.
             </p>
           </div>
-
         </div>
 
         <div className="flex items-center gap-3">

@@ -1,11 +1,39 @@
+/**
+ * vite-env.d.ts
+ *
+ * Global Electron renderer declarations for Digital Total Maintenance.
+ *
+ * Responsibilities:
+ * - Define Electron preload API contracts
+ * - Define IPC request and response payloads
+ * - Extend the global Window interface
+ * - Provide shared renderer-side type safety
+ *
+ * This module DOES NOT:
+ * - Execute Electron actions
+ * - Contain application logic
+ * - Persist application state
+ *
+ * Used by:
+ * React renderer and preload integration.
+ */
+
 /// <reference types="vite/client" />
 
+
+// ============================================================================
+// Scan Request Types
+// ============================================================================
 type ScanRequestPayload = {
   preset: 'test' | 'desktop' | 'downloads' | 'documents' | 'custom' | 'csv';
   customPath?: string;
   csvPath?: string;
 };
 
+
+// ============================================================================
+// Action History Types
+// ============================================================================
 type ActionHistoryEntry = {
   id: string;
   timestamp: string;
@@ -37,6 +65,10 @@ type BrowseResult = {
   path: string;
 };
 
+
+// ============================================================================
+// Scan Progress Types
+// ============================================================================
 type FileScanProgress = {
   type: 'progress';
   status: 'starting' | 'scanning' | 'finalizing';
@@ -71,6 +103,10 @@ type CsvScanProgress = {
 
 type ScanProgress = FileScanProgress | CsvScanProgress;
 
+
+// ============================================================================
+// Electron Renderer API
+// ============================================================================
 interface ElectronAPI {
   sendScanRequest?: (payload: ScanRequestPayload) => void;
   onScanFinished?: (callback: (data: { output?: string }) => void) => () => void;
@@ -326,6 +362,10 @@ interface ElectronAPI {
   }>;
 }
 
+
+// ============================================================================
+// Global Window Augmentation
+// ============================================================================
 interface Window {
   electronAPI?: ElectronAPI;
 }

@@ -1,10 +1,47 @@
+/**
+ * App.tsx
+ *
+ * Primary application coordinator for Digital Total Maintenance.
+ *
+ * Responsibilities:
+ * - Coordinate local filesystem and CSV review workflows
+ * - Manage application-level workspace state
+ * - Coordinate Electron actions and persistence
+ * - Compose DTM's primary user interfaces
+ *
+ * This module currently contains both orchestration and workspace rendering.
+ * Those responsibilities are being progressively extracted into focused
+ * components and hooks while preserving existing behavior.
+ *
+ * Used by:
+ * React application entry point.
+ */
+
+
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+
 import Header from './components/Header';
 import ScanButton from './components/ScanButton';
-import InfoPanel from './components/InfoPanel';
 import QueueFileCard from './components/QueueFileCard';
 import FileBadge from './components/FileBadge';
+
+import SectionCard from './components/SectionCard';
+import KeyValueList from './components/KeyValueList';
+import InsightList, {
+  type InsightActionType,
+  type QueueFilter,
+} from './components/InsightList';
+import ModePill from './components/ModePill';
+import ReviewCapacityControl, {
+  type ReviewCapacity,
+} from './components/ReviewCapacityControl';
+import QueueSortControls from './components/QueueSortControls';
+import SupportDrawer from './components/SupportDrawer';
+
+import type { HistoryFilter } from './components/ActionHistoryPanel';
+
 import { useCsvReviewIndex } from './hooks/useCsvReviewIndex';
+
 import type {
   ScanPreset,
   SortKey,
@@ -16,12 +53,6 @@ import type {
   CsvScanResult,
 } from './types/dtm';
 
-type QueueFilter = {
-  label: string;
-  key: 'context_type' | 'reason' | 'recommended_action' | 'file_kind' | 'user_relevance';
-  value: string;
-} | null;
-
 type BatchPreview = {
   filter: Exclude<QueueFilter, null>;
   action: 'archive' | 'remove' | 'keep';
@@ -32,8 +63,6 @@ type BatchPreview = {
 type SourceQueue = 'review' | 'archive' | 'remove' | 'duplicate';
 
 type SessionFileAction = 'keep' | 'archive' | 'remove';
-
-type InsightActionType = 'archive' | 'remove';
 
 type InsightSectionKind = 'context_type' | 'reason';
 
@@ -65,23 +94,6 @@ type SessionAction =
       type: 'RESET_AFTER_RESCAN';
     };
 
-type ActionHistoryEntry = {
-  id: string;
-  timestamp: string;
-  action:
-    | 'move_to_review'
-    | 'move_to_archive'
-    | 'move_to_trash'
-    | 'restore_from_review'
-    | 'restore_from_archive'
-    | 'restore_from_trash';
-  source_path: string;
-  destination_path?: string | null;
-  status: 'success' | 'error';
-  mode: 'single' | 'bulk';
-  reverts_history_id?: string | null;
-};
-
 type DatasetDecision =
   | 'approved_duplicate'
   | 'legitimate_records'
@@ -111,8 +123,6 @@ type SuspiciousDecisionRecord = {
   column: string;
   updated_at: string;
 };
-
-type ReviewCapacity = 25 | 50 | 100 | 250;
 
 type ScanProgress =
   | {
@@ -223,281 +233,6 @@ function sessionReducer(state: SessionState, action: SessionAction): SessionStat
 
   return state;
 }
-
-function SectionCard({
-  title,
-  subtitle,
-  children,
-}: {
-  title: string;
-  subtitle?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-      <div className="mb-5">
-        <h2 className="text-xl font-semibold tracking-tight text-slate-900">{title}</h2>
-        {subtitle ? <p className="mt-1 text-sm text-slate-500">{subtitle}</p> : null}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function KeyValueList({
-  entries,
-  emptyMessage,
-}: {
-  entries: Array<[string, number | string]>;
-  emptyMessage: string;
-}) {
-  if (entries.length === 0) {
-    return <p className="text-sm text-slate-500">{emptyMessage}</p>;
-  }
-
-  return (
-    <div className="space-y-3">
-      {entries.map(([label, value]) => (
-        <div key={label} className="flex items-center justify-between rounded-2xl bg-slate-50 px-4 py-3">
-          <span className="text-sm font-medium text-slate-700">{label}</span>
-          <span className="text-sm font-semibold text-slate-900">{value}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function InsightList({
-  entries,
-  emptyMessage,
-  onSelect,
-  activeFilter,
-  getMatchCount,
-  getAction,
-  onPreviewRequest,
-}: {
-  entries: Array<{ label: string; count: number }>;
-  emptyMessage: string;
-  onSelect?: (entry: { label: string; count: number }) => void;
-  activeFilter?: QueueFilter;
-  getMatchCount?: (entry: { label: string; count: number }) => number;
-  getAction?: (entry: { label: string; count: number }) => InsightActionType | null;
-  onPreviewRequest?: (
-    entry: { label: string; count: number },
-    action: InsightActionType
-  ) => void;
-}) {
-  if (!entries || entries.length === 0) {
-    return <p className="text-sm text-slate-500">{emptyMessage}</p>;
-  }
-
-  return (
-    <div className="space-y-3">
-      {entries.map((entry) => {
-        const isActive = Boolean(activeFilter && activeFilter.value === entry.label);
-        const matchCount = getMatchCount ? getMatchCount(entry) : entry.count;
-        const hasActionableMatches = matchCount > 0;
-
-        return (
-          <div
-            key={entry.label}
-            className={`rounded-2xl border px-4 py-4 transition ${
-              isActive
-                ? 'border-sky-300 bg-sky-50'
-                : 'border-slate-200 bg-slate-50'
-            }`}
-          >
-            <div className="flex items-start gap-3">
-              <div
-                className={`mt-1 h-7 w-7 shrink-0 rounded-lg ${
-                  isActive ? 'bg-sky-100 text-sky-800' : 'bg-white text-slate-500'
-                } flex items-center justify-center text-xs font-bold ring-1 ring-slate-200`}
-              >
-                {hasActionableMatches ? '→' : '·'}
-              </div>
-
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-semibold text-slate-900">
-                  {entry.label.replace(/_/g, ' ')}
-                </div>
-
-                <div className="mt-1 text-xs leading-5 text-slate-600">
-                {entry.count.toLocaleString()} total pattern match
-                {entry.count === 1 ? '' : 'es'}
-                {getMatchCount ? (
-                  <>
-                    {' '}· {matchCount.toLocaleString()} visible through queue focus
-                  </>
-                ) : null}
-                </div>
-
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  {onSelect && hasActionableMatches ? (
-                    <button
-                      onClick={() => onSelect(entry)}
-                      className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-                        isActive
-                          ? 'bg-sky-900 text-white'
-                          : 'bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-100'
-                      }`}
-                    >
-                      {isActive ? 'Inspecting' : 'Inspect'}
-                    </button>
-                  ) : (
-                    <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-400">
-                      No queue matches
-                    </span>
-                  )}
-
-                  {(() => {
-                    const action = getAction?.(entry) ?? null;
-
-                    if (!action || !onPreviewRequest || !hasActionableMatches) {
-                      return null;
-                    }
-
-                    return (
-                      <button
-                        onClick={() => onPreviewRequest(entry, action)}
-                        className={`rounded-full px-3 py-1.5 text-xs font-semibold text-white transition ${
-                          action === 'archive'
-                            ? 'bg-sky-900 hover:bg-sky-700'
-                            : 'bg-rose-900 hover:bg-rose-700'
-                        }`}
-                      >
-                        {action === 'archive' ? 'Preview Archive' : 'Preview Remove'}
-                      </button>
-                    );
-                  })()}
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function ModePill({
-  active,
-  label,
-  onClick,
-  disabled = false,
-}: {
-  active: boolean;
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-        disabled
-          ? 'cursor-not-allowed bg-slate-100 text-slate-400'
-          : active
-          ? 'bg-slate-900 text-white shadow-sm'
-          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-      }`}
-    >
-      {label}
-    </button>
-  );
-}
-
-function ReviewCapacityControl({
-  label,
-  value,
-  total,
-  visible,
-  onChange,
-}: {
-  label: string;
-  value: ReviewCapacity;
-  total: number;
-  visible: number;
-  onChange: (value: ReviewCapacity) => void;
-}) {
-  return (
-    <div className="flex flex-wrap items-center gap-3">
-      <div className="text-xs text-slate-500">
-        Showing <span className="font-semibold text-slate-800">{visible}</span> of{' '}
-        <span className="font-semibold text-slate-800">{total}</span>
-      </div>
-
-      <label className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-        {label}
-      </label>
-
-      <select
-        value={String(value)}
-        onChange={(event) => {
-          onChange(Number(event.target.value) as ReviewCapacity);
-        }}
-        className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm outline-none transition hover:bg-slate-50"
-      >
-        <option value="25">25</option>
-        <option value="50">50</option>
-        <option value="100">100</option>
-        <option value="250">250</option>
-      </select>
-    </div>
-  );
-}
-
-function QueueSortControls({
-  sortKey,
-  sortDirection,
-  onSortKeyChange,
-  onSortDirectionChange,
-  disabled = false,
-}: {
-  sortKey: SortKey;
-  sortDirection: SortDirection;
-  onSortKeyChange: (value: SortKey) => void;
-  onSortDirectionChange: (value: SortDirection) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <div className="mb-4 flex flex-wrap items-center gap-3">
-      <div className="flex items-center gap-2">
-        <label className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">
-          Sort by
-        </label>
-        <select
-          value={sortKey}
-          disabled={disabled}
-          onChange={(e) => onSortKeyChange(e.target.value as SortKey)}
-          className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-        >
-          <option value="confidence">Confidence</option>
-          <option value="age_days">Age</option>
-          <option value="size">Size</option>
-          <option value="name">Name</option>
-          <option value="review_priority">Review priority</option>
-        </select>
-      </div>
-
-      <div className="flex items-center gap-2">
-        <label className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">
-          Direction
-        </label>
-        <select
-          value={sortDirection}
-          disabled={disabled}
-          onChange={(e) => onSortDirectionChange(e.target.value as SortDirection)}
-          className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-        >
-          <option value="asc">Ascending</option>
-          <option value="desc">Descending</option>
-        </select>
-      </div>
-    </div>
-  );
-}
-
 
 const confidenceRank: Record<'high' | 'medium' | 'low', number> = {
   low: 0,
@@ -687,7 +422,7 @@ function App() {
   const [selectedHistoryIds, setSelectedHistoryIds] = useState<Set<string>>(new Set());
   const [isBulkRestoring, setIsBulkRestoring] = useState(false);
 
-  const [historyFilter, setHistoryFilter] = useState<'undoable' | 'all' | 'restored'>('undoable');
+  const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('undoable');
 
   const [duplicatePrimarySelections, setDuplicatePrimarySelections] = useState<Record<string, string>>({});
   const [busyDuplicateGroupId, setBusyDuplicateGroupId] = useState<string | null>(null);
@@ -697,8 +432,6 @@ function App() {
   const [activeQueueFilter, setActiveQueueFilter] = useState<QueueFilter>(null);
 
   const [csvData, setCsvData] = useState<CsvScanResult | null>(null);
-
-  const [, setLastCsvExportPath] = useState<string | null>(null);
 
   const [showDuplicateBulkMenu, setShowDuplicateBulkMenu] = useState(false);
 
@@ -1538,7 +1271,6 @@ function App() {
 
     try {
       const result = await performQueueAction('archive', duplicatePath, {
-        rescanAfterSuccess: false,
         mode: 'single',
       });
 
@@ -1595,8 +1327,7 @@ function App() {
     for (const item of itemsToArchive) {
       try {
         const result = await performQueueAction('archive', item.path, {
-          rescanAfterSuccess: false,
-          mode: 'bulk',
+          mode: 'single'
         });
 
         if (result.success) {
@@ -1829,7 +1560,7 @@ function App() {
   
   const visibleRemoveCandidates = useMemo(() => {
     return filteredRemoveCandidates.slice(0, removeVisibleCount);
-  }, [sortedRemoveCandidates, activeQueueFilter]);
+  }, [filteredRemoveCandidates, removeVisibleCount]);
 
   const previewConfidence = useMemo(() => {
     if (!batchPreview) return null;
@@ -1937,9 +1668,8 @@ function App() {
   const performQueueAction = async (
     actionType: 'review' | 'archive' | 'remove',
     filePath: string,
-    options?: { rescanAfterSuccess?: boolean; mode?: 'single' | 'bulk' }
+    options?: {mode?: 'single' | 'bulk' }
   ) => {
-    const rescanAfterSuccess = options?.rescanAfterSuccess ?? true;
     const mode = options?.mode ?? 'single';
 
     const result = await invokeAction(actionType, filePath, mode);
@@ -1948,9 +1678,6 @@ function App() {
       removePathFromQueues(filePath);
     
       await loadActionHistory();
-    
-      if (rescanAfterSuccess) {
-      }
     
       return {
         success: true,
@@ -2144,7 +1871,6 @@ function App() {
     if (!csvData?.success) return;
   
     setActionStatus(null);
-    setLastCsvExportPath(null);
   
     try {
       const result = await window.electronAPI?.runCsvAction?.({
@@ -2163,10 +1889,7 @@ function App() {
         exclude_duplicate_rows: true,
         exclude_suspicious_rows: true,
       });
-  
-      if (result?.success) {
-        setLastCsvExportPath(result.export_path || null);
-      }
+
   
       setActionStatus({
         tone: result?.success ? 'success' : 'error',
@@ -2644,374 +2367,29 @@ function App() {
         isScanning={isScanning}
       />
         <main className="mt-8 space-y-8">
-        {isSupportOpen && (
-          <>
-            {/* BACKDROP */}
-            <div
-              className="fixed inset-0 z-40 bg-black/30"
-              onClick={() => setIsSupportOpen(false)}
-            />
-
-            {/* DRAWER */}
-            <div className="fixed left-0 top-0 z-50 h-full w-[340px] overflow-y-auto border-r border-slate-200 bg-white shadow-2xl">
-              <div className="p-6 space-y-6">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold text-slate-900">
-                    Workspace Support
-                  </div>
-                </div>
-                  {/* LEFT SUPPORT RAIL */}
-                  {insights && (
-                    <SectionCard
-                      title="DTM Insights"
-                      subtitle="High-level interpretation of your current digital environment."
-                    >
-                      <div className="space-y-3 text-sm text-slate-700">
-                        <p className="font-medium text-slate-900">{insights.summary}</p>
-
-                        <ul className="space-y-1">
-                          <li>• {insights.review} files need review</li>
-                          <li>• {insights.archive} files can likely be archived</li>
-                          <li>• {insights.remove} files appear safe to remove</li>
-                        </ul>
-
-                        <p>
-                          Most files have not been modified in over 180 days: {insights.oldFiles}
-                        </p>
-
-                        <p className="text-slate-600">
-                          Recommendation: Start by reviewing unknown files, then archive older compressed files.
-                        </p>
-                      </div>
-                    </SectionCard>
-                  )}
-
-                  <SectionCard
-                    title="Recent Actions"
-                    subtitle="A local record of successful maintenance actions performed by DTM."
-                  >
-                    <div className="mb-4 flex flex-wrap gap-3">
-                      <button
-                        onClick={() => setHistoryFilter('undoable')}
-                        className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                          historyFilter === 'undoable'
-                            ? 'bg-slate-900 text-white shadow-sm'
-                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                        }`}
-                      >
-                        Undo Available
-                      </button>
-
-                      <button
-                        onClick={() => setHistoryFilter('all')}
-                        className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                          historyFilter === 'all'
-                            ? 'bg-slate-900 text-white shadow-sm'
-                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                        }`}
-                      >
-                        All Actions
-                      </button>
-
-                      <button
-                        onClick={() => setHistoryFilter('restored')}
-                        className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                          historyFilter === 'restored'
-                            ? 'bg-slate-900 text-white shadow-sm'
-                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                        }`}
-                      >
-                        Restored
-                      </button>
-                    </div>
-
-                    {historyFilter === 'undoable' && filteredActionHistory.length > 0 ? (
-                      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                        <div className="text-sm text-slate-700">
-                          Selected{' '}
-                          <span className="font-semibold">{selectedUndoableHistoryEntries.length}</span>{' '}
-                          undoable action
-                          {selectedUndoableHistoryEntries.length === 1 ? '' : 's'}
-                        </div>
-
-                        <button
-                          onClick={handleBulkRestoreSelected}
-                          disabled={
-                            selectedUndoableHistoryEntries.length === 0 ||
-                            isBulkRestoring ||
-                            isBulkActing ||
-                            isScanning
-                          }
-                          className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-                        >
-                          {isBulkRestoring
-                            ? 'Restoring…'
-                            : `Undo Selected (${selectedUndoableHistoryEntries.length})`}
-                        </button>
-                      </div>
-                    ) : null}
-
-                    <div className="mb-3 text-xs text-slate-500">
-                      Showing {filteredActionHistory.length} item{filteredActionHistory.length === 1 ? '' : 's'}
-                      {historyFilter === 'undoable'
-                        ? ' with undo available'
-                        : historyFilter === 'restored'
-                        ? ' that have already been restored'
-                        : ' from action history'}
-                    </div>
-
-                    {filteredActionHistory.length === 0 ? (
-                      <p className="text-sm text-slate-500">
-                        {historyFilter === 'undoable'
-                          ? 'No undoable actions are currently available.'
-                          : historyFilter === 'restored'
-                          ? 'No restored actions have been logged yet.'
-                          : 'No actions have been logged yet.'}
-                      </p>
-                    ) : (
-                      <div className="max-h-[26rem] overflow-y-auto space-y-3 pr-1">
-                        {filteredActionHistory.map((entry) => {
-                          const filename = entry.source_path.split('/').pop() || entry.source_path;
-
-                          const actionLabel =
-                          entry.action === 'move_to_review'
-                            ? 'Moved to Review'
-                            : entry.action === 'move_to_archive'
-                            ? 'Moved to Archive'
-                            : entry.action === 'move_to_trash'
-                            ? 'Moved to Trash'
-                            : entry.action === 'restore_from_review'
-                            ? 'Restored from Review'
-                            : entry.action === 'restore_from_archive'
-                            ? 'Restored from Archive'
-                            : 'Restored from Trash';
-
-                          return (
-                            <div
-                              key={entry.id}
-                              className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4"
-                            >
-                              {canUndoHistoryEntry(entry) ? (
-                                <label className="mb-3 flex items-center gap-2 text-xs font-medium text-slate-600">
-                                  <input
-                                    type="checkbox"
-                                    checked={selectedHistoryIds.has(entry.id)}
-                                    onChange={() => toggleSelectedHistoryId(entry.id)}
-                                    disabled={isBulkRestoring || isBulkActing || isScanning}
-                                  />
-                                  Select for undo
-                                </label>
-                              ) : null}
-                          
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <div className="text-sm font-semibold text-slate-900">
-                                  {actionLabel}
-                                </div>
-                                <div className="text-xs text-slate-500">
-                                  {new Date(entry.timestamp).toLocaleString()}
-                                </div>
-                              </div>
-
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <div className="text-sm font-semibold text-slate-900">
-                                  {actionLabel}
-                                </div>
-                                <div className="text-xs text-slate-500">
-                                  {new Date(entry.timestamp).toLocaleString()}
-                                </div>
-                              </div>
-
-                              <div className="mt-2 text-sm text-slate-700">{filename}</div>
-
-                              <div className="mt-2 text-xs text-slate-500 break-all">
-                                Source: {entry.source_path}
-                              </div>
-
-                              {entry.destination_path ? (
-                                <div className="mt-1 text-xs text-slate-500 break-all">
-                                  Destination: {entry.destination_path}
-                                </div>
-                              ) : null}
-
-                              <div className="mt-3 flex flex-wrap gap-2">
-                                <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
-                                  {entry.mode}
-                                </span>
-                                <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200">
-                                  {entry.status}
-                                </span>
-                              </div>
-
-                              {canUndoHistoryEntry(entry) ? (
-                                <div className="mt-4">
-                                  <button
-                                    onClick={() => handleUndoHistoryEntry(entry)}
-                                    disabled={busyHistoryId === entry.id || isBulkActing || isScanning}
-                                    className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-                                  >
-                                    {busyHistoryId === entry.id ? 'Restoring…' : 'Undo'}
-                                  </button>
-                                </div>
-                              ) : null}
-
-                              {!canUndoHistoryEntry(entry) &&
-                              (
-                                entry.action === 'move_to_review' ||
-                                entry.action === 'move_to_archive' ||
-                                entry.action === 'move_to_trash'
-                              ) ? (
-                                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-500 ring-1 ring-slate-200">
-                                  already restored
-                                </span>
-                              ) : null}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-
-                    <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
-                      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
-                        Dev Utility
-                      </div>
-
-                      <p className="mt-1 text-xs leading-5 text-amber-800">
-                        Clears local action history only. This does not restore, move, delete, or modify any files.
-                      </p>
-
-                      <button
-                        onClick={handleClearActionHistory}
-                        disabled={isBulkActing || isScanning}
-                        className="mt-3 rounded-full bg-amber-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-                      >
-                        Clear Local History
-                      </button>
-                    </div>
-                  </SectionCard>
-
-                  {scanData && (
-                    <SectionCard
-                      title="Scan Summary"
-                      subtitle="current Scan scope and bounded result coverage"
-                    >
-                      <section className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4 shadow-sm">
-                      <div className="space-y-2 text-sm text-slate-700">
-                        <div>
-                          <span className="font-semibold">Scan mode:</span> {scanData.mode}
-                        </div>
-                        <div>
-                          <span className="font-semibold">Detailed review items shown:</span>{' '}
-                          {scanData.review_files.length} of {scanData.review_total}
-                        </div>
-                        <div>
-                          <span className="font-semibold">Detailed archive items shown:</span>{' '}
-                          {scanData.archive_candidates.length} of {scanData.archive_total}
-                        </div>
-                        <div>
-                          <span className="font-semibold">Detailed remove items shown:</span>{' '}
-                          {scanData.remove_candidates.length} of {scanData.remove_total}
-                        </div>
-                        <div>
-                          <span className="font-semibold">Excluded directories:</span>{' '}
-                          {scanData.excluded_dirs_count}
-                        </div>
-
-                        {scanData.scan_warnings?.length > 0 ? (
-                          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
-                            {scanData.scan_warnings.map((warning, index) => (
-                              <div key={index}>⚠️ {warning}</div>
-                            ))}
-                          </div>
-                        ) : null}
-                      </div>
-                    </section>
-                    </SectionCard>
-                  )}
-
-                  {scanData && scanData.errors_total > 0 ? (
-                    <SectionCard
-                      title="Scan Access Notes"
-                      subtitle="Files DTM could not inspect during this scan."
-                    >
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                        <p>
-                          DTM skipped or could not inspect {scanData.errors_total} file
-                          {scanData.errors_total === 1 ? '' : 's'} during this scan.
-                        </p>
-
-                        <p className="mt-2 text-xs leading-5 text-slate-500">
-                          This is common on active systems. Some files may be temporary,
-                          protected by the operating system, or created and removed while
-                          scanning.
-                        </p>
-                      </div>
-                    </SectionCard>
-                  ) : null}
-
-                  <SectionCard
-                    title="Action Insights"
-                    subtitle="What each queue means and how DTM thinks about file decisions."
-                  >
-                    <div className="space-y-3">
-                      <InfoPanel title="How does DTM work?">
-                        <p>
-                          DTM scans your files and turns them into decision queues instead of showing everything at once.
-                        </p>
-                        <p>
-                          It is designed to be bounded, explainable, and reversible. DTM suggests actions, but you stay in control.
-                        </p>
-                      </InfoPanel>
-
-                      <InfoPanel title="What does 'Needs Decision' mean?">
-                        <p>
-                          These files require a user decision before DTM should archive, remove, or keep them in place.
-                        </p>
-                        <p>
-                          This queue protects user control by keeping uncertain choices explicit.
-                        </p>
-                      </InfoPanel>
-
-                      <InfoPanel title="What are 'Archive Candidates'?">
-                        <p>
-                          These files are likely worth keeping, but not keeping in your active workspace.
-                        </p>
-                        <p>
-                          Archiving reduces clutter without destroying information.
-                        </p>
-                      </InfoPanel>
-
-                      <InfoPanel title="What is the 'Remove Queue'?">
-                        <p>
-                          These files appear temporary, disposable, or low-value based on DTM’s current scan logic.
-                        </p>
-                        <p>
-                          DTM moves them to Trash rather than permanently deleting them.
-                        </p>
-                      </InfoPanel>
-
-                      <InfoPanel title="How do duplicate groups work?">
-                        <p>
-                          DTM groups files that appear to be copies of the same item family based on name patterns, size, and structure.
-                        </p>
-                        <p>
-                          You can select one copy to keep active and archive the others.
-                        </p>
-                      </InfoPanel>
-
-                      <InfoPanel title="What does confidence mean?">
-                        <p>
-                          Confidence reflects how strongly DTM believes a file belongs in a category.
-                        </p>
-                        <p>
-                          High confidence means a stronger heuristic match. Lower confidence means more ambiguity.
-                        </p>
-                      </InfoPanel>
-                    </div>
-                  </SectionCard>
-              </div>
-            </div>
-          </>
-        )}
+          
+        <SupportDrawer
+          isOpen={isSupportOpen}
+          onClose={() => setIsSupportOpen(false)}
+          insights={insights}
+          scanData={scanData}
+          historyFilter={historyFilter}
+          filteredActionHistory={filteredActionHistory}
+          selectedHistoryIds={selectedHistoryIds}
+          selectedUndoableCount={
+            selectedUndoableHistoryEntries.length
+          }
+          busyHistoryId={busyHistoryId}
+          isBulkRestoring={isBulkRestoring}
+          isBulkActing={isBulkActing}
+          isScanning={isScanning}
+          canUndoHistoryEntry={canUndoHistoryEntry}
+          onHistoryFilterChange={setHistoryFilter}
+          onToggleSelectedHistoryId={toggleSelectedHistoryId}
+          onUndoHistoryEntry={handleUndoHistoryEntry}
+          onBulkRestoreSelected={handleBulkRestoreSelected}
+          onClearActionHistory={handleClearActionHistory}
+        />
 
           <div className="flex flex-col gap-5 rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">

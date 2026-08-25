@@ -1,3 +1,27 @@
+"""
+batch_action.py
+
+Batch execution engine for Digital Total Maintenance.
+
+Responsibilities:
+- Execute bulk filesystem actions
+- Coordinate archive, review, and trash operations
+- Record action history
+- Produce batch execution summaries
+
+This module DOES NOT:
+- Classify files
+- Decide recommended actions
+- Scan folders
+- Restore previous actions
+
+Called by:
+Electron IPC batch actions.
+
+Outputs:
+Structured batch execution results and per-file outcomes.
+"""
+
 import argparse
 import json
 import platform
@@ -8,9 +32,15 @@ from typing import Any
 from action_history import append_action_history
 
 
+# =============================================================================
+# Configuration
+# =============================================================================
 SUPPORTED_ACTIONS = {"review", "archive", "remove"}
 
 
+# =============================================================================
+# Batch Utility Helpers
+# =============================================================================
 def safe_result(success: bool, message: str, **extra: Any) -> dict:
     return {"success": success, "message": message, **extra}
 
@@ -49,6 +79,9 @@ def get_trash_dir() -> Path:
     return Path.home() / ".local" / "share" / "Trash" / "files"
 
 
+# =============================================================================
+# Action Configuration
+# =============================================================================
 def get_action_config(action: str, dtm_root: Path) -> dict:
     if action == "review":
         return {
@@ -74,6 +107,9 @@ def get_action_config(action: str, dtm_root: Path) -> dict:
     raise ValueError(f"Unsupported action: {action}")
 
 
+# =============================================================================
+# Batch File Execution
+# =============================================================================
 def move_one_file(action: str, file_path: str, dtm_root: Path, mode: str) -> dict:
     if not file_path or not isinstance(file_path, str):
         return safe_result(False, "Invalid file path.", source_path=file_path, path=file_path)
@@ -99,15 +135,15 @@ def move_one_file(action: str, file_path: str, dtm_root: Path, mode: str) -> dic
         )
 
     config = get_action_config(action, dtm_root)
-    destination = unique_destination(config["target_dir"], source.name)
+    action_destination = unique_destination(config["target_dir"], source.name)
 
     try:
-        shutil.move(str(source), str(destination))
+        shutil.move(str(source), str(action_destination))
 
         history_entry = append_action_history(
             action=config["history_action"],
             source_path=str(source),
-            destination_path=str(destination),
+            destination_path=str(action_destination),
             mode=mode,
             status="success",
         )
@@ -118,8 +154,8 @@ def move_one_file(action: str, file_path: str, dtm_root: Path, mode: str) -> dic
             action=config["history_action"],
             path=str(source),
             source_path=str(source),
-            destination=str(destination),
-            destination_path=str(destination),
+            destination=str(action_destination),
+            destination_path=str(action_destination),
             history_entry=history_entry,
         )
 
@@ -128,7 +164,7 @@ def move_one_file(action: str, file_path: str, dtm_root: Path, mode: str) -> dic
             append_action_history(
                 action=config["history_action"],
                 source_path=str(source),
-                destination_path=str(destination),
+                destination_path=str(action_destination),
                 mode=mode,
                 status="error",
             )
@@ -141,8 +177,8 @@ def move_one_file(action: str, file_path: str, dtm_root: Path, mode: str) -> dic
             action=config["history_action"],
             path=str(source),
             source_path=str(source),
-            destination=str(destination),
-            destination_path=str(destination),
+            destination=str(action_destination),
+            destination_path=str(action_destination),
         )
 
 
@@ -162,13 +198,13 @@ def run_batch(payload: dict, dtm_root: Path) -> dict:
     success_count = sum(1 for item in results if item.get("success"))
     failure_count = len(results) - success_count
 
-    action_label = (
-        "sent to review"
-        if action == "review"
-        else "archived"
-        if action == "archive"
-        else "moved to Trash"
-    )
+    ACTION_LABELS = {
+        "review": "sent to review",
+        "archive": "archived",
+        "remove": "moved to Trash",
+        }
+
+    action_label = ACTION_LABELS[action]
 
     return {
         "success": failure_count == 0,
@@ -187,6 +223,9 @@ def run_batch(payload: dict, dtm_root: Path) -> dict:
     }
 
 
+# =============================================================================
+# Payload Loading
+# =============================================================================
 def load_payload(args: argparse.Namespace) -> dict:
     if args.payload_file:
         with open(args.payload_file, "r", encoding="utf-8") as file:
@@ -198,6 +237,9 @@ def load_payload(args: argparse.Namespace) -> dict:
     return {}
 
 
+# =============================================================================
+# CLI Entry Point
+# =============================================================================
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--app-data", required=True)

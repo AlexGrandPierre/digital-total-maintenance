@@ -1,9 +1,38 @@
+"""
+csv_review_index.py
+
+Provides paginated access to persisted CSV review indexes.
+
+Responsibilities:
+    • Generate stable dataset identifiers
+    • Locate duplicate and suspicious review indexes
+    • Read JSONL pages from disk
+    • Exclude already-reviewed findings
+    • Return pagination metadata
+
+This module DOES NOT:
+    • Scan CSV files
+    • Detect duplicates
+    • Detect suspicious values
+    • Modify datasets
+    • Persist review decisions
+
+Called by:
+    Electron IPC → csv-review-index
+
+Outputs:
+    JSON payloads containing paginated duplicate groups or suspicious values.
+"""
+
 import argparse
 import hashlib
 import json
 from pathlib import Path
 
 
+# ===============================================================================
+# Dataset Identification
+# ===============================================================================
 def make_dataset_id(csv_path):
     normalized = str(Path(csv_path).expanduser().resolve())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
@@ -13,6 +42,9 @@ def get_default_dtm_root():
     return Path.home() / "Desktop" / "Digital Total Maintenance"
 
 
+# ===============================================================================
+# Index File Resolution
+# ===============================================================================
 def get_index_dir(csv_path, dtm_root=None):
     root = Path(dtm_root) if dtm_root else get_default_dtm_root()
     return root / "CSV Review Index" / make_dataset_id(csv_path)
@@ -30,6 +62,9 @@ def get_index_file(csv_path, kind, dtm_root=None):
     raise ValueError(f"Unsupported index kind: {kind}")
 
 
+# ===============================================================================
+# JSONL Pagination
+# ===============================================================================
 def read_jsonl_page(
     path,
     offset=0,
@@ -37,7 +72,7 @@ def read_jsonl_page(
     exclude_ids=None,
     id_field=None,
 ):
-    items = []
+    page_items = []
 
     total = 0
     remaining_total = 0
@@ -84,18 +119,18 @@ def read_jsonl_page(
                 visible_index += 1
                 continue
 
-            if len(items) >= page_limit:
+            if len(page_items) >= page_limit:
                 visible_index += 1
                 continue
 
-            items.append(item)
+            page_items.append(item)
             visible_index += 1
 
-    next_offset = start + len(items)
+    next_offset = start + len(page_items)
 
     return {
         "success": True,
-        "items": items,
+        "items": page_items,
         "offset": start,
         "limit": page_limit,
         "total": total,
@@ -105,6 +140,10 @@ def read_jsonl_page(
     }
 
 
+
+# ===============================================================================
+# Page Loading
+# ===============================================================================
 def load_page(payload, kind):
     csv_path = payload.get("csv_path", "")
     offset = payload.get("offset", 0)
@@ -112,11 +151,11 @@ def load_page(payload, kind):
     dtm_root = payload.get("dtm_root")
 
     if not csv_path:
-      return {
-          "success": False,
-          "message": "No CSV path provided.",
-          "items": [],
-      }
+        return {
+            "success": False,
+            "message": "No CSV path provided.",
+            "items": [],
+        }
 
     index_file = get_index_file(csv_path, kind, dtm_root)
 
@@ -142,6 +181,9 @@ def load_page(payload, kind):
     return result
 
 
+# ===============================================================================
+# CLI Entry Point
+# ===============================================================================
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=["duplicates", "suspicious"])

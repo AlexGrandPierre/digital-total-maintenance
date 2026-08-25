@@ -1,3 +1,52 @@
+/**
+ * dtm.ts
+ *
+ * Shared TypeScript contracts for Digital Total Maintenance.
+ *
+ * Responsibilities:
+ * - Define local filesystem scan models
+ * - Define CSV analysis and review models
+ * - Define shared confidence, priority, and action types
+ * - Describe data exchanged between the renderer and Electron/backend layers
+ *
+ * This module DOES NOT:
+ * - Contain application logic
+ * - Manage React state
+ * - Execute Electron actions
+ * - Transform backend responses
+ *
+ * Used by:
+ * React components, hooks, and application state.
+ *
+ * Outputs:
+ * Shared TypeScript types for DTM frontend workflows.
+ */
+
+// ============================================================================
+// Shared Primitive Types
+// ============================================================================
+
+export type ConfidenceLevel = 'high' | 'medium' | 'low';
+
+export type DuplicateConfidence = 'high' | 'medium';
+
+export type SeverityLevel = 'high' | 'medium' | 'low';
+
+export type PriorityLabel = 'critical' | 'high' | 'medium' | 'low';
+
+export type ReviewPriority = 'high' | 'medium' | 'low';
+
+export type UserRelevance = 'high' | 'medium' | 'low';
+
+export type RecommendedAction = 'keep' | 'ignore' | 'review' | 'archive' | 'remove';
+
+export type UiVisibility = 'normal' | 'hidden_by_default';
+
+
+// ============================================================================
+// Desktop Scan Configuration
+// ============================================================================
+
 export type ScanPreset =
   | 'test'
   | 'desktop'
@@ -6,8 +55,19 @@ export type ScanPreset =
   | 'custom'
   | 'csv';
 
-export type SortKey = 'name' | 'age_days' | 'size' | 'confidence' | 'review_priority';
+export type SortKey =
+  | 'name'
+  | 'age_days'
+  | 'size'
+  | 'confidence'
+  | 'review_priority';
+
 export type SortDirection = 'asc' | 'desc';
+
+
+// ============================================================================
+// Desktop Scan Models
+// ============================================================================
 
 export type ScanInsightItem = {
   label: string;
@@ -25,20 +85,20 @@ export type ClassifiedFile = {
   file_kind: string;
   location_context: string;
   context_type: string;
-  user_relevance: 'high' | 'medium' | 'low';
+  user_relevance: UserRelevance;
   system_role: string;
   context_reason: string;
   known_type_explanation: string;
   classification_reason: string;
-  action_confidence?: 'high' | 'medium' | 'low';
-  confidence: 'high' | 'medium' | 'low';
+  action_confidence?: ConfidenceLevel;
+  confidence: ConfidenceLevel;
   confidence_reason: string;
-  recommended_action: 'keep' | 'ignore' | 'review' | 'archive' | 'remove';
+  recommended_action: RecommendedAction;
   suggested_action_reason: string;
   reason: string;
   risk_flags: string[];
-  ui_visibility: 'normal' | 'hidden_by_default';
-  review_priority: 'high' | 'medium' | 'low' | null;
+  ui_visibility: UiVisibility;
+  review_priority: ReviewPriority | null;
   review_priority_reason: string | null;
 };
 
@@ -49,18 +109,18 @@ export type DuplicateGroupItem = {
   size: number;
   age_days: number;
   category: string;
-  confidence: 'high' | 'medium' | 'low';
+  confidence: ConfidenceLevel;
   priority_score?: number;
-  priority_label?: 'critical' | 'high' | 'medium' | 'low';
+  priority_label?: PriorityLabel;
   priority_reason?: string;
-  recommended_action: 'keep' | 'ignore' | 'review' | 'archive' | 'remove';
+  recommended_action: RecommendedAction;
   reason: string;
-  ui_visibility: 'normal' | 'hidden_by_default';
+  ui_visibility: UiVisibility;
 };
 
 export type DuplicateGroup = {
   group_id: string;
-  confidence: 'high' | 'medium';
+  confidence: DuplicateConfidence;
   reason: string;
   normalized_name: string;
   items: DuplicateGroupItem[];
@@ -87,9 +147,20 @@ export type PatternPreview = {
   };
 };
 
+
+// ============================================================================
+// CSV Analysis Models
+// ============================================================================
+
 export type CsvColumnProfile = {
   name: string;
-  inferred_type: 'text' | 'number' | 'date' | 'boolean' | 'mixed' | 'empty';
+  inferred_type:
+    | 'text'
+    | 'number'
+    | 'date'
+    | 'boolean'
+    | 'mixed'
+    | 'empty';
   non_empty_count: number;
   empty_count: number;
   unique_count: number;
@@ -99,11 +170,78 @@ export type CsvColumnProfile = {
 export type CsvSuggestion = {
   id: string;
   label: string;
-  severity: 'low' | 'medium' | 'high';
+  severity: SeverityLevel;
   reason: string;
   columns?: string[];
   count?: number;
 };
+
+export type CsvDataQualityInsight = {
+  id: string;
+  category:
+    | 'duplicates'
+    | 'missing_values'
+    | 'empty_structure'
+    | 'type_quality'
+    | 'suspicious_values';
+  severity: SeverityLevel;
+  title: string;
+  summary: string;
+  count: number;
+  affected_columns?: string[];
+  issue_id?: string;
+  recommended_action: string;
+};
+
+export type CsvSuspiciousValueExample = {
+  row_number: number;
+  column: string;
+  value: string;
+  issues: string[];
+  issue_id?: string;
+  severity_score?: number;
+  severity_label?: PriorityLabel;
+  severity_reason?: string;
+  row_missing_count?: number;
+};
+
+export type CsvSuspiciousValueSummary = {
+  total: number;
+  by_column: Record<string, number>;
+  by_issue: Record<string, number>;
+  examples: CsvSuspiciousValueExample[];
+  row_numbers: number[];
+};
+
+
+// ============================================================================
+// CSV Duplicate Models
+// ============================================================================
+
+export type CsvDuplicateGroupRow = {
+  row_number: number;
+  values: Record<string, string>;
+};
+
+export type CsvDuplicateGroup = {
+  group_id: string;
+  confidence: DuplicateConfidence;
+  priority_score?: number;
+  priority_label?: PriorityLabel;
+  priority_reason?: string;
+  reason: string;
+  matching_columns: string[];
+  varying_id_columns: string[];
+  rows: CsvDuplicateGroupRow[];
+  row_numbers: number[];
+  rows_total: number;
+  hidden_rows_count: number;
+};
+
+
+// ============================================================================
+// CSV Scan Result
+// ============================================================================
 
 export type CsvScanResult = {
   type: 'csv_scan';
@@ -144,14 +282,14 @@ export type CsvScanResult = {
       rows_total: number;
       reason: string;
     }[];
-  
+
     medium_priority: {
       group_id: string;
       confidence: number;
       rows_total: number;
       reason: string;
     }[];
-  
+
     low_priority: {
       group_id: string;
       confidence: number;
@@ -167,65 +305,10 @@ export type CsvScanResult = {
   };
 };
 
-export type CsvDataQualityInsight = {
-  id: string;
-  category:
-    | 'duplicates'
-    | 'missing_values'
-    | 'empty_structure'
-    | 'type_quality'
-    | 'suspicious_values';
-  severity: 'low' | 'medium' | 'high';
-  title: string;
-  summary: string;
-  count: number;
-  affected_columns?: string[];
-  issue_id?: string;
-  recommended_action: string;
-};
 
-export type CsvSuspiciousValueExample = {
-  row_number: number;
-  column: string;
-  value: string;
-  issues: string[];
-  issue_id?: string;
-
-  severity_score?: number;
-  severity_label?: 'critical' | 'high' | 'medium' | 'low';
-  severity_reason?: string;
-  row_missing_count?: number;
-};
-
-export type CsvSuspiciousValueSummary = {
-  total: number;
-  by_column: Record<string, number>;
-  by_issue: Record<string, number>;
-  examples: CsvSuspiciousValueExample[];
-  row_numbers: number[];
-};
-
-export type CsvDuplicateGroupRow = {
-  row_number: number;
-  values: Record<string, string>;
-};
-
-export type CsvDuplicateGroup = {
-  group_id: string;
-  confidence: 'high' | 'medium';
-
-  priority_score?: number;
-  priority_label?: 'critical' | 'high' | 'medium' | 'low';
-  priority_reason?: string;
-
-  reason: string;
-  matching_columns: string[];
-  varying_id_columns: string[];
-  rows: CsvDuplicateGroupRow[];
-  row_numbers: number[];
-  rows_total: number;
-  hidden_rows_count: number;
-};
+// ============================================================================
+// Local Filesystem Scan Result
+// ============================================================================
 
 export type ScanResult = {
   scanned_at: string;
@@ -270,7 +353,9 @@ export type ScanResult = {
     error: string;
     raw_error?: string;
   }>;
+
   errors_total: number;
+
   error_summary: {
     permission_denied: number;
     missing_during_scan: number;

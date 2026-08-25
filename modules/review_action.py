@@ -1,3 +1,28 @@
+"""
+review_action.py
+
+Review execution layer for Digital Total Maintenance.
+
+Responsibilities:
+- Move files into the DTM Review workspace
+- Prevent destination filename collisions
+- Support single and batch review actions
+- Record successful moves in action history
+
+This module DOES NOT:
+- Classify files
+- Decide whether a file should be reviewed
+- Delete files
+- Restore reviewed files
+
+Called by:
+Electron IPC and batch filesystem actions.
+
+Outputs:
+Structured action results including destination paths and history entries.
+"""
+
+
 import sys
 import json
 import shutil
@@ -6,6 +31,9 @@ from datetime import datetime, timezone
 from action_history import append_action_history
 
 
+# =============================================================================
+# Argument Parsing
+# =============================================================================
 def parse_args(args: list[str]) -> dict:
     parsed = {
         "app_data": None,
@@ -34,6 +62,9 @@ def parse_args(args: list[str]) -> dict:
     return parsed
 
 
+# =============================================================================
+# Review Path Helpers
+# =============================================================================
 def get_dtm_root(dtm_root=None) -> Path:
     if dtm_root:
         return Path(dtm_root).expanduser().resolve()
@@ -60,6 +91,9 @@ def unique_destination(directory: Path, filename: str) -> Path:
         counter += 1
 
 
+# =============================================================================
+# Review Execution
+# =============================================================================
 def move_one_to_review(file_path: str, dtm_root=None, mode: str = "single") -> dict:
     source = Path(file_path).expanduser().resolve()
     review_dir = get_dtm_root(dtm_root) / "Review"
@@ -81,14 +115,14 @@ def move_one_to_review(file_path: str, dtm_root=None, mode: str = "single") -> d
         }
 
     review_dir.mkdir(parents=True, exist_ok=True)
-    destination = unique_destination(review_dir, source.name)
+    review_destination = unique_destination(review_dir, source.name)
 
-    shutil.move(str(source), str(destination))
+    shutil.move(str(source), str(review_destination))
 
     history_entry = append_action_history(
         action="move_to_review",
         source_path=str(source),
-        destination_path=str(destination),
+        destination_path=str(review_destination),
         mode=mode,
         status="success",
     )
@@ -97,7 +131,7 @@ def move_one_to_review(file_path: str, dtm_root=None, mode: str = "single") -> d
         "success": True,
         "action": "move_to_review",
         "path": str(source),
-        "destination": str(destination),
+        "destination": str(review_destination),
         "message": "File moved to DTM Review.",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "history_entry": history_entry,
@@ -133,6 +167,9 @@ def move_to_review(file_path: str, dtm_root=None, mode: str = "single") -> dict:
     return move_one_to_review(file_path, dtm_root=dtm_root, mode=mode)
 
 
+# =============================================================================
+# CLI Entry Point
+# =============================================================================
 if __name__ == "__main__":
     parsed = parse_args(sys.argv[1:])
     args = parsed["remaining"]

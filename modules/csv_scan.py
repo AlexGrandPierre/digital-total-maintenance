@@ -1,3 +1,39 @@
+"""
+csv_scan.py
+
+Scanning engine for the CSV workspace.
+
+Responsibilities
+- Scan CSV datasets
+- Detect duplicate candidates
+- Detect suspicious values
+- Build column profiles
+- Generate review indexes
+- Produce scan summaries
+
+This module DOES NOT
+- Export CSV datasets
+- Persist review decisions
+- Execute user actions
+
+Called by
+Electron IPC → csv_scan
+
+Outputs
+CSV scan results consumed by the Review Workspace.
+"""
+
+# Future Refactor
+
+# This module currently combines
+# scan engine
+# duplicate detection
+# suspicious analysis
+# column profiling
+# review index persistence
+
+# Eventually these will become dedicated modules while preserving scan_csv() as the public API.
+
 import csv
 import hashlib
 import json
@@ -38,6 +74,9 @@ ID_COLUMN_HINTS = ["id", "uuid", "guid", "key", "code", "number", "no."]
 SCAN_STARTED_AT = time.time()
 
 
+# ===============================================================================
+# Progress Reporting
+# ===============================================================================
 def emit_progress(
     rows_scanned,
     current_stage,
@@ -69,6 +108,9 @@ def emit_progress(
     }), flush=True)
 
 
+# ===============================================================================
+# Normalization Helpers
+# ===============================================================================
 def normalize_cell(value):
     return "" if value is None else str(value).strip()
 
@@ -83,6 +125,30 @@ def normalize_for_matching(value):
     return value
 
 
+def normalize_identity_column_role(column):
+    normalized = normalize_column_name(column)
+
+    if normalized in {"first name", "firstname", "given name", "legal first name"}:
+        return "given_name"
+
+    if normalized in {"last name", "lastname", "surname", "family name", "legal last name"}:
+        return "family_name"
+
+    if normalized in {"date of birth", "dob", "birth date", "birthdate"}:
+        return "date_of_birth"
+
+    if normalized in {"gender", "sex"}:
+        return "gender"
+
+    if normalized in {"gmsregistrationnumber", "gms registration number", "gms registration no"}:
+        return "gms_registration_number"
+
+    return None
+
+
+# ===============================================================================
+# Duplicate Detection Helpers
+# ===============================================================================    
 def looks_like_id_column(column):
     normalized = normalize_column_name(column)
 
@@ -122,27 +188,10 @@ def make_group_id(values):
     raw = "|".join(values)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
-def normalize_identity_column_role(column):
-    normalized = normalize_column_name(column)
 
-    if normalized in {"first name", "firstname", "given name", "legal first name"}:
-        return "given_name"
-
-    if normalized in {"last name", "lastname", "surname", "family name", "legal last name"}:
-        return "family_name"
-
-    if normalized in {"date of birth", "dob", "birth date", "birthdate"}:
-        return "date_of_birth"
-
-    if normalized in {"gender", "sex"}:
-        return "gender"
-
-    if normalized in {"gmsregistrationnumber", "gms registration number", "gms registration no"}:
-        return "gms_registration_number"
-
-    return None
-
-
+# ===============================================================================
+# Priority Scoring
+# ===============================================================================
 def get_duplicate_priority(group, duplicate_key_columns):
     roles = {
         normalize_identity_column_role(column)
@@ -186,8 +235,10 @@ def get_duplicate_priority(group, duplicate_key_columns):
         "priority_label": "low",
         "priority_reason": "Rows share a weaker duplicate signal and should be treated as low-priority review material.",
     }
-
-
+    
+# ===============================================================================
+# Type Inference
+# ===============================================================================
 def parse_date(value):
     value = str(value).strip()
     if not value:
@@ -249,6 +300,9 @@ def infer_type_from_counts(non_empty_count, number_count, date_count, boolean_co
     return "text"
 
 
+# ===============================================================================
+# Suspicious Value Detection
+# ===============================================================================
 def contains_suspicious_characters(value):
     value = str(value)
 
@@ -390,6 +444,9 @@ def inspect_suspicious_value(column, value):
     return issues
 
 
+# ===============================================================================
+# Empty Scan Results
+# ===============================================================================
 def empty_csv_result(csv_path, error):
     return {
         "type": "csv_scan",
@@ -427,6 +484,9 @@ def empty_csv_result(csv_path, error):
     }
 
 
+# ===============================================================================
+# Insight Generation
+# ===============================================================================
 def build_data_quality_insights(
     row_count,
     missing_by_column,
@@ -565,6 +625,9 @@ def make_dataset_id(csv_path):
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
 
+# ===============================================================================
+# Review Index Persistence
+# ===============================================================================
 def get_csv_review_index_dir(dtm_root, csv_path):
     dataset_id = make_dataset_id(csv_path)
     index_dir = (
@@ -609,6 +672,10 @@ def write_csv_review_index(dtm_root, csv_path, duplicate_groups, suspicious_exam
 def get_default_dtm_root():
     return str(Path.home() / "Desktop" / "Digital Total Maintenance")
 
+
+# ===============================================================================
+# CSV Scan Engine
+# ===============================================================================
 def scan_csv(csv_path):
     if not csv_path or not os.path.exists(csv_path):
         return empty_csv_result(csv_path, f"CSV file does not exist: {csv_path}")

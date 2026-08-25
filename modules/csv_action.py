@@ -1,3 +1,44 @@
+"""
+csv_action.py
+
+Export engine for the CSV Review workspace.
+
+Responsibilities:
+- Export duplicate review datasets
+- Export suspicious-value review datasets
+- Generate cleaned CSV copies
+- Route Electron export requests
+- Read persisted review indexes
+
+This module DOES NOT:
+- Detect duplicates
+- Detect suspicious values
+- Persist review sessions
+- Paginate review indexes
+
+Called by:
+Electron IPC → csv-action
+
+Outputs:
+CSV export files.
+"""
+
+# =============================================================================
+# Future Refactor
+# =============================================================================
+#
+# This module currently combines:
+#
+# • Export utilities
+# • CSV IO
+# • Export implementations
+# • Action dispatch
+#
+# As DTM grows these responsibilities should migrate into
+# dedicated csv/ modules while preserving the public API.
+#
+# =============================================================================
+
 import argparse
 import csv
 import json
@@ -6,6 +47,9 @@ from datetime import datetime
 from csv_review_index import get_index_file
 
 
+# ===============================================================================
+# Export Helpers
+# ===============================================================================
 def ensure_export_dir(app_data_path):
     desktop_path = os.path.expanduser("~/Desktop")
     export_dir = os.path.join(
@@ -24,6 +68,9 @@ def safe_filename(name):
         for char in name
     ).strip("_")
 
+# ===============================================================================
+# CSV File Utilities
+# ===============================================================================
 def read_jsonl_all(path):
     items = []
 
@@ -98,6 +145,9 @@ def write_rows(export_path, columns, rows, include_dtm_row_number=True):
             writer.writerow(output_row)
 
 
+# ===============================================================================
+# Duplicate Export Actions
+# ===============================================================================
 def export_duplicate_groups(app_data_path, csv_path, duplicate_groups, dataset_decisions=None):
     export_dir = ensure_export_dir(app_data_path)
     columns, source_rows = read_csv_rows(csv_path)
@@ -177,6 +227,9 @@ def export_duplicate_groups(app_data_path, csv_path, duplicate_groups, dataset_d
     }
 
 
+# ===============================================================================
+# Suspicious Export Actions
+# ===============================================================================
 def export_suspicious_rows(
     app_data_path,
     csv_path,
@@ -226,7 +279,9 @@ def export_suspicious_rows(
         "row_count": len(export_rows),
     }
 
-
+# ===============================================================================
+# Clean Copy Export
+# ===============================================================================
 def export_clean_copy(
     app_data_path,
     csv_path,
@@ -243,8 +298,6 @@ def export_clean_copy(
 ):
     export_dir = ensure_export_dir(app_data_path)
     columns, source_rows = read_csv_rows(csv_path)
-
-    duplicate_row_numbers = set()
 
     dataset_decisions = dataset_decisions or {}
     duplicate_row_numbers = set()
@@ -370,6 +423,9 @@ def export_clean_copy(
         },
     }
 
+# ===============================================================================
+# Decision-Based Exports
+# ===============================================================================
 def get_decision(decisions, key, default="pending"):
     record = decisions.get(key, {})
 
@@ -493,7 +549,9 @@ def export_suspicious_rows_by_decision(
         "row_count": len(export_rows),
     }
 
-
+# ===============================================================================
+# Action Dispatcher
+# ===============================================================================
 def run_action(app_data_path, payload, dtm_root=None):
     action = payload.get("action")
     csv_path = payload.get("csv_path")
@@ -605,7 +663,9 @@ def run_action(app_data_path, payload, dtm_root=None):
         "message": f"Unsupported CSV action: {action}",
     }
 
-
+# ===============================================================================
+# CLI Entry Point
+# ===============================================================================
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--app-data", required=True)
