@@ -124,46 +124,6 @@ function runPythonScript(scriptPath, args = []) {
   });
 }
 
-function readActionHistory(limit = 20) {
-  return new Promise((resolve) => {
-    const historyScriptPath = getBundledPythonPath('action_history');
-
-    const py = spawnPythonScript(historyScriptPath, [
-      '--app-data',
-      getAppDataPath(),
-      '--dtm-root',
-      getDtmDesktopRoot().root,
-      String(limit),
-      'read',
-    ]);
-
-    let output = '';
-    let errorOutput = '';
-
-    py.stdout.on('data', (data) => {
-      output += data.toString();
-    });
-
-    py.stderr.on('data', (data) => {
-      errorOutput += data.toString();
-    });
-
-    py.on('close', () => {
-      try {
-        resolve(JSON.parse(output || '[]'));
-      } catch {
-        console.error('Failed to parse action history:', errorOutput || output);
-        resolve([]);
-      }
-    });
-
-    py.on('error', (err) => {
-      console.error('Failed to launch action history:', err.message);
-      resolve([]);
-    });
-  });
-}
-
 function getAppDataPath() {
   return app.getPath('userData');
 }
@@ -889,7 +849,9 @@ app.whenReady().then(() => {
   
     try {
       fs.unlinkSync(payloadPath);
-    } catch {}
+    } catch {
+      // Payload cleanup is best-effort after the Python process completes.
+    }
   
     try {
       return JSON.parse(result.output || '{}');

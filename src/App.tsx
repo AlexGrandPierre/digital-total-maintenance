@@ -593,20 +593,20 @@ function App() {
       }
     });
 
-    const unsubscribeProgress = window.electronAPI?.onScanProgress?.((data: any) => {
+    const unsubscribeProgress = window.electronAPI?.onScanProgress?.((data) => {
       if ('rows_scanned' in data) {
         setScanProgress({
           type: 'csv_progress',
           status: data.status,
           target: data.target,
           rows_scanned: data.rows_scanned,
-          rows_per_second: data.rows_per_second,
+          rows_per_second: data.rows_per_second ?? 0,
           elapsed_seconds: data.elapsed_seconds,
           current_stage: data.current_stage,
-          duplicate_candidates: data.duplicate_candidates,
-          suspicious_values: data.suspicious_values,
-          missing_values: data.missing_values,
-          total_rows_estimate: data.total_rows_estimate,
+          duplicate_candidates: data.duplicate_candidates ?? 0,
+          suspicious_values: data.suspicious_values ?? 0,
+          missing_values: data.missing_values ?? 0,
+          total_rows_estimate: data.total_rows_estimate ?? null,
         });
       
         return;
@@ -623,7 +623,7 @@ function App() {
         archive_total: data.archive_total,
         remove_total: data.remove_total,
         duplicates_total: data.duplicates_total,
-        excluded_dirs_count: data.excluded_dirs_count,
+        excluded_dirs_count: data.excluded_dirs_count ?? 0,
       });
     });
 

@@ -1,6 +1,6 @@
 # Foundation and Refactor Notes
 
-**Status:** Working document for Foundation Sprint 1. This file records current behavioral contracts, known gaps, and a provisional semantic hypothesis. It is not a second product specification; `README.md` and `INVARIANTS.md` remain authoritative for product direction and principles.
+**Status:** Temporary working notebook for the current refactor. It records current behavioral contracts and concrete risks; it is not permanent project doctrine. Delete it when the refactor is complete after durable knowledge has moved into tests, invariants, or appropriate code documentation.
 
 ## Current behavioral contract
 
@@ -38,27 +38,9 @@ Run the current contract suite with `npm test`.
 - **Bounds:** UI result collections are capped and disclose hidden counts in several places, but scans may still retain complete candidate structures in memory. Presentation bounds are not necessarily processing bounds.
 - **Durability and concurrency:** JSON history and session writes are non-atomic and unlocked. Action history is capped, so it is useful operational history rather than a permanent audit log.
 - **Path authority:** mutation and restore operations trust paths supplied through the application workflow. Their security boundary and validation expectations need explicit treatment before broader deployment.
-- **Tooling baseline:** `npm run lint` is currently non-functional because ESLint 9 is installed without an `eslint.config.*` file. Establishing a lint policy is separate from recording current runtime behavior.
+- **React hook dependencies:** linting reports six existing missing-dependency warnings in `App.tsx`. They should be resolved with the owning workflow boundaries rather than mechanically changing effect execution during baseline work.
 
-## Semantic model 0.1 — hypothesis under test
-
-One possible shared vocabulary is:
-
-`Investigation -> Source -> Revision -> Analysis Run -> Finding -> Evidence -> Decision Event -> Action Event -> Validation`
-
-Supporting references may include an actor, detector/rule and version, engine version, configuration, timestamps, and explicit uncertainty.
-
-This model is a lens for testing whether local-file and CSV workflows can share durable meaning. It is not an approved architecture, storage schema, class hierarchy, or requirement that every workflow instantiate every concept. The next vertical slices should try to disprove or simplify it before any broad migration.
-
-## Product questions requiring explicit decisions
-
-1. **Investigation boundary:** Is an investigation one source, one user objective, one review session, or a container spanning sources and repeated analysis runs?
-2. **Identity across revisions:** What makes a source the same source after it moves, changes, is re-exported, or is replaced at the same path? Which changes create a new revision versus a new source?
-3. **Finding continuity:** When should a finding remain the same finding after evidence, detector logic, grouping, or source revision changes?
-4. **Provenance:** Which actor identities and processing details are required locally now, and which can remain optional until collaboration exists?
-5. **Decision and validation semantics:** Is a reviewer decision authoritative by itself, or can it remain unvalidated? Who or what can validate, reverse, or supersede it?
-
-These questions should be answered through concrete workflows, beginning with CSV duplicate review, rather than by designing an abstract platform in isolation.
+Questions about durable investigations, source and revision identity, finding continuity, provenance, and validation are deliberately deferred. During this refactor they should be revisited only when a concrete existing defect requires the smallest appropriate decision.
 
 ## Refactor guardrail
 
