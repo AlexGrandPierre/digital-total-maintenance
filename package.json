@@ -6,7 +6,7 @@
   "type": "module",
   "main": "electron/electron-entry.cjs",
   "scripts": {
-    "test": "python3 -m unittest discover -s tests -p 'test_*.py' -v",
+    "test": "python3 -m unittest discover -s tests -p 'test_*.py' -v && node --experimental-strip-types --test tests/frontend/*.test.mjs",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",

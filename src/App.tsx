@@ -38,9 +38,8 @@ import ReviewCapacityControl, {
 import QueueSortControls from './components/QueueSortControls';
 import SupportDrawer from './components/SupportDrawer';
 
-import type { HistoryFilter } from './components/ActionHistoryPanel';
-
 import { useCsvReviewIndex } from './hooks/useCsvReviewIndex';
+import { useActionHistory } from './domains/history/useActionHistory';
 
 import type {
   ScanPreset,
@@ -375,6 +374,22 @@ function App() {
     message: string;
   } | null>(null);
 
+  const {
+    historyFilter,
+    setHistoryFilter,
+    filteredActionHistory,
+    selectedHistoryIds,
+    selectedUndoableHistoryEntries,
+    busyHistoryId,
+    isBulkRestoring,
+    canUndoHistoryEntry,
+    refreshActionHistory,
+    handleClearActionHistory,
+    handleUndoHistoryEntry,
+    toggleSelectedHistoryId,
+    handleBulkRestoreSelected,
+  } = useActionHistory({ onStatusChange: setActionStatus });
+
   const [busyPath, setBusyPath] = useState<string | null>(null);
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
 
@@ -401,8 +416,6 @@ function App() {
 
   const [duplicateVisibleCount, setDuplicateVisibleCount] = useState(8);
 
-  const [actionHistory, setActionHistory] = useState<ActionHistoryEntry[]>([]);
-
   const [datasetDecisions, setDatasetDecisions] = useState<
     Record<string, DatasetDecisionRecord>
   >({});
@@ -416,13 +429,6 @@ function App() {
   >({});
 
   const [busySuspiciousDecisionId, setBusySuspiciousDecisionId] = useState<string | null>(null);
-
-  const [busyHistoryId, setBusyHistoryId] = useState<string | null>(null);
-
-  const [selectedHistoryIds, setSelectedHistoryIds] = useState<Set<string>>(new Set());
-  const [isBulkRestoring, setIsBulkRestoring] = useState(false);
-
-  const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('undoable');
 
   const [duplicatePrimarySelections, setDuplicatePrimarySelections] = useState<Record<string, string>>({});
   const [busyDuplicateGroupId, setBusyDuplicateGroupId] = useState<string | null>(null);
@@ -566,7 +572,7 @@ function App() {
       setRemoveVisibleCount(8);
       setDuplicateVisibleCount(8);
 
-      loadActionHistory();
+      refreshActionHistory();
 
       dispatchSession({ type: 'RESET_AFTER_RESCAN' });
       
@@ -791,18 +797,6 @@ function App() {
     openBatchPreview(preview);
   };
 
-  const loadActionHistory = async () => {
-    try {
-      const history = await window.electronAPI?.getActionHistory?.(100);
-
-      setActionHistory(
-        Array.isArray(history) ? (history as ActionHistoryEntry[]) : []
-      );
-    } catch {
-      setActionHistory([]);
-    }
-  };
-
   const loadDatasetDecisions = async () => {
     try {
       const result = await window.electronAPI?.getDatasetDecisions?.();
@@ -814,77 +808,6 @@ function App() {
       setDatasetDecisions({});
     }
   };
-
-  const handleClearActionHistory = async () => {
-    try {
-      const result = await window.electronAPI?.clearActionHistory?.();
-  
-      if (result?.success) {
-        setActionHistory([]);
-        setActionStatus({
-          tone: 'success',
-          message: result.message,
-        });
-      } else {
-        setActionStatus({
-          tone: 'error',
-          message: result?.message || 'Failed to clear action history.',
-        });
-      }
-    } catch (error) {
-      setActionStatus({
-        tone: 'error',
-        message: error instanceof Error ? error.message : 'Unexpected clear history failure.',
-      });
-    }
-  };
-
-  const canUndoHistoryEntry = (entry: ActionHistoryEntry) => {
-    if (
-      entry.status !== 'success' ||
-      (
-        entry.action !== 'move_to_review' &&
-        entry.action !== 'move_to_archive' &&
-        entry.action !== 'move_to_trash'
-      ) ||
-      !entry.source_path ||
-      !entry.destination_path
-    ) {
-      return false;
-    }
-
-    const alreadyRestored = actionHistory.some((historyEntry) => {
-      return (
-        (
-          historyEntry.action === 'restore_from_review' ||
-          historyEntry.action === 'restore_from_archive' ||
-          historyEntry.action === 'restore_from_trash'
-        ) &&
-        historyEntry.status === 'success' &&
-        historyEntry.reverts_history_id === entry.id
-      );
-    });
-
-    return !alreadyRestored;
-  };
-
-  const filteredActionHistory = useMemo(() => {
-    if (historyFilter === 'undoable') {
-      return actionHistory.filter((entry) => canUndoHistoryEntry(entry));
-    }
-
-    if (historyFilter === 'restored') {
-      return actionHistory.filter(
-        (entry) =>
-          entry.action === 'restore_from_review' ||
-          entry.action === 'restore_from_archive' ||
-          entry.action === 'restore_from_trash'
-      );
-    }
-
-    return actionHistory;
-  }, [actionHistory, historyFilter]);
-
 
   const visibleDuplicates = useMemo(() => {
     if (!scanData) return [];
@@ -1276,7 +1199,7 @@ function App() {
 
       if (result.success) {
         removeDuplicateFromQueue(duplicatePath);
-        await loadActionHistory();
+        await refreshActionHistory();
 
         setActionStatus({
           tone: 'success',
@@ -1356,7 +1279,7 @@ function App() {
         groupId: group.group_id,
       });
     
-      await loadActionHistory();
+      await refreshActionHistory();
     }
 
     if (failureCount === 0) {
@@ -1372,109 +1295,6 @@ function App() {
     }
 
     setBusyDuplicateGroupId(null);
-  };
-
-  const handleUndoHistoryEntry = async (entry: ActionHistoryEntry) => {
-    if (!canUndoHistoryEntry(entry)) {
-      return;
-    }
-
-    setBusyHistoryId(entry.id);
-    setActionStatus(null);
-
-    try {
-      const result = await window.electronAPI?.restoreFromHistory?.(entry);
-
-      if (result?.success) {
-        setActionStatus({
-          tone: 'success',
-          message: result.destination
-            ? `Restored file: ${result.destination}. Refresh scan when you want to reconcile results.`
-            : `${result.message} Refresh scan when you want to reconcile results.`,
-        });
-
-        await loadActionHistory();
-      } else {
-        console.error('Restore result:', result);
-
-        setActionStatus({
-          tone: 'error',
-          message: result?.message
-            ? `Restore failed: ${result.message}`
-            : 'Restore failed with no detailed message.',
-        });
-      }
-    } catch (error) {
-      console.error('Undo exception:', error);
-
-      setActionStatus({
-        tone: 'error',
-        message: error instanceof Error ? `Undo exception: ${error.message}` : 'Unexpected undo failure.',
-      });
-    } finally {
-      setBusyHistoryId(null);
-    }
-  };
-
-  const toggleSelectedHistoryId = (entryId: string) => {
-    setSelectedHistoryIds((prev) => {
-      const next = new Set(prev);
-  
-      if (next.has(entryId)) {
-        next.delete(entryId);
-      } else {
-        next.add(entryId);
-      }
-  
-      return next;
-    });
-  };
-  
-  const selectedUndoableHistoryEntries = filteredActionHistory.filter(
-    (entry) => selectedHistoryIds.has(entry.id) && canUndoHistoryEntry(entry)
-  );
-  
-  const handleBulkRestoreSelected = async () => {
-    if (selectedUndoableHistoryEntries.length === 0 || isBulkRestoring) {
-      return;
-    }
-  
-    setIsBulkRestoring(true);
-    setActionStatus(null);
-  
-    try {
-      const result = await window.electronAPI?.bulkRestoreFromHistory?.({
-        entries: selectedUndoableHistoryEntries,
-        mode: 'bulk',
-      });
-  
-      if (result?.success || result?.partial_success) {
-        await loadActionHistory();
-        setSelectedHistoryIds(new Set());
-  
-        setActionStatus({
-          tone: result.failure_count === 0 ? 'success' : 'error',
-          message:
-            result.message ||
-            `Restored ${result.success_count ?? 0} selected item(s).`,
-        });
-      } else {
-        setActionStatus({
-          tone: 'error',
-          message: result?.message || 'Bulk restore failed.',
-        });
-      }
-    } catch (error) {
-      setActionStatus({
-        tone: 'error',
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Unexpected bulk restore failure.',
-      });
-    } finally {
-      setIsBulkRestoring(false);
-    }
   };
 
   const insights = useMemo(() => {
@@ -1677,7 +1497,7 @@ function App() {
     if (result?.success) {
       removePathFromQueues(filePath);
     
-      await loadActionHistory();
+      await refreshActionHistory();
     
       return {
         success: true,
@@ -1747,7 +1567,7 @@ function App() {
         }
       }
   
-      await loadActionHistory();
+      await refreshActionHistory();
   
       const actionLabel =
         actionType === 'review'
