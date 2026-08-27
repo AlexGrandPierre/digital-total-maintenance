@@ -41,9 +41,10 @@ import SupportDrawer from './components/SupportDrawer';
 import { useCsvReviewIndex } from './hooks/useCsvReviewIndex';
 import { useActionHistory } from './domains/history/useActionHistory';
 import { useCsvReviewSession } from './domains/csv-review/useCsvReviewSession';
+import { useScanSession } from './domains/scanning/useScanSession';
+import type { ScanCompletion } from './domains/scanning/types';
 
 import type {
-  ScanPreset,
   SortKey,
   SortDirection,
   ClassifiedFile,
@@ -92,34 +93,6 @@ type SessionAction =
     }
   | {
       type: 'RESET_AFTER_RESCAN';
-    };
-
-type ScanProgress =
-  | {
-      type: 'csv_progress';
-      status: string;
-      target: string;
-      rows_scanned: number;
-      rows_per_second: number;
-      elapsed_seconds: number;
-      current_stage: string;
-      duplicate_candidates: number;
-      suspicious_values: number;
-      missing_values: number;
-      total_rows_estimate: number | null;
-    }
-  | {
-      type: 'progress';
-      status: string;
-      target: string;
-      files_scanned: number;
-      current_path: string;
-      elapsed_seconds: number;
-      review_total: number;
-      archive_total: number;
-      remove_total: number;
-      duplicates_total: number;
-      excluded_dirs_count: number;
     };
 
 const initialSessionState: SessionState = {
@@ -333,13 +306,8 @@ function formatDuration(seconds: number) {
 }
 
 function App() {
-  const [, setScanOutput] = useState<string>('No scan yet.');
   const [scanData, setScanData] = useState<ScanResult | null>(null);
-  const [isScanning, setIsScanning] = useState(false);
-  const [scanPreset, setScanPreset] = useState<ScanPreset>('desktop');
-  const [customPath, setCustomPath] = useState('');
   const [showSystemFiles, setShowSystemFiles] = useState(false);
-  const [csvPath, setCsvPath] = useState('');
   const [actionStatus, setActionStatus] = useState<{
     tone: 'success' | 'error';
     message: string;
@@ -362,7 +330,6 @@ function App() {
   } = useActionHistory({ onStatusChange: setActionStatus });
 
   const [busyPath, setBusyPath] = useState<string | null>(null);
-  const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
 
   const [isBulkActing, setIsBulkActing] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<{
@@ -484,6 +451,63 @@ function App() {
     onStatusChange: setActionStatus,
   });
 
+  const handleScanCompleted = (completion: ScanCompletion) => {
+    setReviewVisibleCount(8);
+    setArchiveVisibleCount(8);
+    setRemoveVisibleCount(8);
+    setDuplicateVisibleCount(8);
+
+    refreshActionHistory();
+    dispatchSession({ type: 'RESET_AFTER_RESCAN' });
+
+    try {
+      if (completion.kind === 'csv') {
+        setCsvData(completion.result);
+        setScanData(null);
+        initializeFromScan(completion.result);
+        loadCsvReviewSession(completion.result.path);
+        return;
+      }
+
+      if (completion.kind === 'filesystem') {
+        setScanData(completion.result);
+        setCsvData(null);
+        loadLegacyDatasetDecisions();
+        return;
+      }
+
+      setScanData(null);
+      setCsvData(null);
+    } catch {
+      setScanData(null);
+      setCsvData(null);
+    }
+  };
+
+  const {
+    isScanning,
+    scanPreset,
+    setScanPreset,
+    customPath,
+    setCustomPath,
+    csvPath,
+    setCsvPath,
+    scanProgress,
+    scanTargetLabel,
+    handleBrowseForFolder,
+    handleBrowseForCsv,
+    handleScan,
+    triggerRescan,
+  } = useScanSession({
+    isBulkActing,
+    onStatusChange: setActionStatus,
+    onScanStarted: () => {
+      setScanData(null);
+      setCsvData(null);
+    },
+    onScanCompleted: handleScanCompleted,
+  });
+
   const [duplicatePriorityFilter, setDuplicatePriorityFilter] = useState<
     'all' | 'critical' | 'high' | 'medium' | 'low'
   >('all');
@@ -538,84 +562,6 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const unsubscribeFinished = window.electronAPI?.onScanFinished?.((data: { output?: string }) => {
-      const output = data.output || 'Scan completed with no output.';
-      setScanOutput(output);
-      setIsScanning(false);
-      setScanProgress(null);
-
-      setReviewVisibleCount(8);
-      setArchiveVisibleCount(8);
-      setRemoveVisibleCount(8);
-      setDuplicateVisibleCount(8);
-
-      refreshActionHistory();
-
-      dispatchSession({ type: 'RESET_AFTER_RESCAN' });
-      
-      try {
-        const parsed = JSON.parse(output);
-      
-        if (parsed.type === 'csv_scan') {
-          setCsvData(parsed);
-          setScanData(null);
-      
-          initializeFromScan(parsed);
-      
-          loadCsvReviewSession(parsed.path);
-          return;
-        }
-      
-        setScanData(parsed);
-        setCsvData(null);
-        loadLegacyDatasetDecisions();
-      } catch {
-        setScanData(null);
-        setCsvData(null);
-      }
-    });
-
-    const unsubscribeProgress = window.electronAPI?.onScanProgress?.((data) => {
-      if ('rows_scanned' in data) {
-        setScanProgress({
-          type: 'csv_progress',
-          status: data.status,
-          target: data.target,
-          rows_scanned: data.rows_scanned,
-          rows_per_second: data.rows_per_second ?? 0,
-          elapsed_seconds: data.elapsed_seconds,
-          current_stage: data.current_stage,
-          duplicate_candidates: data.duplicate_candidates ?? 0,
-          suspicious_values: data.suspicious_values ?? 0,
-          missing_values: data.missing_values ?? 0,
-          total_rows_estimate: data.total_rows_estimate ?? null,
-        });
-      
-        return;
-      }
-      
-      setScanProgress({
-        type: 'progress',
-        status: data.status,
-        target: data.target,
-        files_scanned: data.files_scanned,
-        current_path: data.current_path,
-        elapsed_seconds: data.elapsed_seconds,
-        review_total: data.review_total,
-        archive_total: data.archive_total,
-        remove_total: data.remove_total,
-        duplicates_total: data.duplicates_total,
-        excluded_dirs_count: data.excluded_dirs_count ?? 0,
-      });
-    });
-
-    return () => {
-      unsubscribeFinished?.();
-      unsubscribeProgress?.();
-    };
-  }, []);
-
-  useEffect(() => {
     if (!scanData) {
       setDuplicatePrimarySelections({});
       return;
@@ -634,24 +580,6 @@ function App() {
       return next;
     });
   }, [scanData]);
-
-  const scanTargetLabel = useMemo(() => {
-    switch (scanPreset) {
-      case 'desktop':
-        return 'Desktop';
-      case 'downloads':
-        return 'Downloads';
-      case 'documents':
-        return 'Documents';
-      case 'custom':
-        return 'Custom Folder';
-      case 'csv':
-        return 'CSV Dataset';
-      case 'test':
-      default:
-        return 'Test Folder';
-    }
-  }, [scanPreset]);
 
   const sortedReviewFiles = useMemo(() => {
     if (!scanData) return [];
@@ -698,38 +626,6 @@ function App() {
   
     return signatures;
   }, [scanData, sortedReviewFiles, sortedArchiveCandidates, sortedRemoveCandidates]);
-
-  const handleBrowseForFolder = async () => {
-    try {
-      const result = await window.electronAPI?.browseForFolder?.();
-
-      if (result?.success && result.path) {
-        setCustomPath(result.path);
-        setActionStatus(null);
-      }
-    } catch (error) {
-      setActionStatus({
-        tone: 'error',
-        message: error instanceof Error ? error.message : 'Failed to open folder picker.',
-      });
-    }
-  };
-
-  const handleBrowseForCsv = async () => {
-    try {
-      const result = await window.electronAPI?.browseForCsv?.();
-  
-      if (result?.success && result.path) {
-        setCsvPath(result.path);
-        setActionStatus(null);
-      }
-    } catch (error) {
-      setActionStatus({
-        tone: 'error',
-        message: error instanceof Error ? error.message : 'Failed to open CSV picker.',
-      });
-    }
-  };
 
   const buildInsightPreview = (
     sectionKind: InsightSectionKind,
@@ -827,88 +723,6 @@ function App() {
       return true;
     });
   }, [scanData, sortedReviewFiles, sortedArchiveCandidates, sortedRemoveCandidates]);
-
-  const handleScan = () => {
-    if (isBulkActing) {
-      setActionStatus({
-        tone: 'error',
-        message: 'Bulk action in progress. Please wait until it finishes before starting a new scan.',
-      });
-      return;
-    }
-  
-    setScanProgress(null);
-  
-    const normalizedCustomPath = customPath.trim();
-    const normalizedCsvPath = csvPath.trim();
-  
-    if (scanPreset === 'custom' && !normalizedCustomPath) {
-      setActionStatus({
-        tone: 'error',
-        message: 'Please enter a folder path before scanning a custom location.',
-      });
-      return;
-    }
-  
-    if (scanPreset === 'custom' && normalizedCustomPath === '/') {
-      setActionStatus({
-        tone: 'error',
-        message:
-          'Scanning the system root is restricted in the current safe mode. Choose a more specific folder.',
-      });
-      return;
-    }
-  
-    if (scanPreset === 'csv' && !normalizedCsvPath) {
-      setActionStatus({
-        tone: 'error',
-        message: 'Please choose or enter a CSV file path before scanning a CSV dataset.',
-      });
-      return;
-    }
-  
-    setIsScanning(true);
-    setScanData(null);
-    setCsvData(null);
-    setActionStatus(null);
-    setScanOutput(`Scanning ${scanTargetLabel}... Please wait.`);
-  
-    if (scanPreset === 'csv') {
-      setScanProgress({
-        type: 'csv_progress',
-        status: 'starting',
-        target: scanTargetLabel,
-        rows_scanned: 0,
-        rows_per_second: 0,
-        elapsed_seconds: 0,
-        current_stage: 'starting',
-        duplicate_candidates: 0,
-        suspicious_values: 0,
-        missing_values: 0,
-        total_rows_estimate: 0,
-      });
-    } else {
-      setScanProgress({
-        type: 'progress',
-        status: 'starting',
-        target: scanTargetLabel,
-        files_scanned: 0,
-        current_path: 'Preparing scan...',
-        elapsed_seconds: 0,
-        review_total: 0,
-        archive_total: 0,
-        remove_total: 0,
-        duplicates_total: 0,
-        excluded_dirs_count: 0,
-      });
-    }
-  
-    window.electronAPI?.sendScanRequest?.({
-      preset: scanPreset,
-      customPath: normalizedCustomPath,
-      csvPath: normalizedCsvPath,
-    });
-  };
 
   const removePathFromQueues = (
     filePath: string,
@@ -1393,25 +1207,12 @@ function App() {
     };
   }, [scanData, sessionState]);
 
-  const getCurrentScanPayload = () => ({
-    preset: scanPreset,
-    customPath: customPath.trim(),
-    csvPath: csvPath.trim(),
-  });
-
   const getFilterMatchCount = (filter: Exclude<QueueFilter, null>) => {
     return (
       applyQueueFilter(sortedReviewFiles, filter).length +
       applyQueueFilter(sortedArchiveCandidates, filter).length +
       applyQueueFilter(sortedRemoveCandidates, filter).length
     );
-  };
-
-  const triggerRescan = () => {
-    setIsScanning(true);
-    setScanProgress(null);
-    setScanOutput(`Refreshing ${scanTargetLabel} after changes...`);
-    window.electronAPI?.sendScanRequest?.(getCurrentScanPayload());
   };
 
   const invokeAction = async (

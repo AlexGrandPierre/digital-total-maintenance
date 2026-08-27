@@ -19,6 +19,10 @@ import type {
   DatasetDecisionRecord,
   SuspiciousDecisionRecord,
 } from '../domains/csv-review/types';
+import type {
+  ScanProgressEvent,
+  ScanRequest,
+} from '../domains/scanning/types';
 
 export async function readActionHistory(limit = 100) {
   return window.electronAPI?.getActionHistory?.(limit);
@@ -59,4 +63,28 @@ export async function saveCsvReviewSession(
     duplicate_decisions: duplicateDecisions,
     suspicious_decisions: suspiciousDecisions,
   });
+}
+
+export async function browseForFolder() {
+  return window.electronAPI?.browseForFolder?.();
+}
+
+export async function browseForCsv() {
+  return window.electronAPI?.browseForCsv?.();
+}
+
+export function requestScan(payload: ScanRequest) {
+  window.electronAPI?.sendScanRequest?.(payload);
+}
+
+export function subscribeToScanFinished(
+  callback: (data: { output?: string }) => void,
+) {
+  return window.electronAPI?.onScanFinished?.(callback);
+}
+
+export function subscribeToScanProgress(
+  callback: (data: ScanProgressEvent) => void,
+) {
+  return window.electronAPI?.onScanProgress?.(callback);
 }
