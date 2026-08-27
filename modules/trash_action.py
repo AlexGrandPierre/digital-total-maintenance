@@ -23,126 +23,29 @@ Structured action results including destination paths and history entries.
 """
 
 
-import os
 import sys
 import json
-import shutil
-import platform
-from pathlib import Path
-from datetime import datetime, timezone
-from action_history import append_action_history
-
-
-# =============================================================================
-# Argument Parsing
-# =============================================================================
-def parse_args(args: list[str]) -> dict:
-    parsed = {
-        "app_data": None,
-        "dtm_root": None,
-        "remaining": [],
-    }
-
-    index = 0
-
-    while index < len(args):
-        arg = args[index]
-
-        if arg == "--app-data" and index + 1 < len(args):
-            parsed["app_data"] = args[index + 1]
-            index += 2
-            continue
-
-        if arg == "--dtm-root" and index + 1 < len(args):
-            parsed["dtm_root"] = args[index + 1]
-            index += 2
-            continue
-
-        parsed["remaining"].append(arg)
-        index += 1
-
-    return parsed
-
-
-# =============================================================================
-# Trash Path Helpers
-# =============================================================================
-def get_trash_dir(dtm_root=None):
-    system = platform.system().lower()
-
-    if system == "darwin":
-        return Path.home() / ".Trash"
-
-    if system == "windows":
-        return Path.home() / "Desktop" / "Digital Total Maintenance" / "Trash Review"
-
-    return Path.home() / ".local" / "share" / "Trash" / "files"
-
-
-def unique_destination(directory: Path, filename: str) -> Path:
-    destination = directory / filename
-
-    if not destination.exists():
-        return destination
-
-    stem = destination.stem
-    suffix = destination.suffix
-    counter = 1
-
-    while True:
-        candidate = directory / f"{stem}_{counter}{suffix}"
-
-        if not candidate.exists():
-            return candidate
-
-        counter += 1
+from filesystem_actions.core import (
+    execute_single_move,
+    get_trash_dir,
+    parse_action_args as parse_args,
+    unique_destination,
+)
 
 
 # =============================================================================
 # Trash Execution
 # =============================================================================
 def move_one_to_trash(file_path, dtm_root=None, mode="single") -> dict:
-    source = Path(file_path).expanduser().resolve()
     trash_dir = get_trash_dir(dtm_root)
 
-    if not source.exists():
-        return {
-            "success": False,
-            "action": "move_to_trash",
-            "path": str(source),
-            "message": "File does not exist.",
-        }
-
-    if not source.is_file():
-        return {
-            "success": False,
-            "action": "move_to_trash",
-            "path": str(source),
-            "message": "Target is not a file.",
-        }
-
-    trash_dir.mkdir(parents=True, exist_ok=True)
-    trash_destination = unique_destination(trash_dir, source.name)
-
-    shutil.move(str(source), str(trash_destination))
-
-    history_entry = append_action_history(
-        action="move_to_trash",
-        source_path=str(source),
-        destination_path=str(trash_destination),
+    return execute_single_move(
+        file_path,
+        destination_dir=trash_dir,
+        history_action="move_to_trash",
+        success_message="File moved to Trash.",
         mode=mode,
-        status="success",
     )
-
-    return {
-        "success": True,
-        "action": "move_to_trash",
-        "path": str(source),
-        "destination": str(trash_destination),
-        "message": "File moved to Trash.",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "history_entry": history_entry,
-    }
 
 
 def move_to_trash(file_path, dtm_root=None, mode="single") -> dict:

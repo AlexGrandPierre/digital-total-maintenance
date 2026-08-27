@@ -24,12 +24,15 @@ Structured batch execution results and per-file outcomes.
 
 import argparse
 import json
-import platform
-import shutil
 from pathlib import Path
 from typing import Any
 
 from action_history import append_action_history
+from filesystem_actions.core import (
+    execute_prepared_move,
+    get_trash_dir,
+    unique_destination,
+)
 
 
 # =============================================================================
@@ -48,35 +51,6 @@ def safe_result(success: bool, message: str, **extra: Any) -> dict:
 def ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
-
-
-def unique_destination(directory: Path, filename: str) -> Path:
-    destination = directory / filename
-
-    if not destination.exists():
-        return destination
-
-    stem = destination.stem
-    suffix = destination.suffix
-    counter = 1
-
-    while True:
-        candidate = directory / f"{stem}_{counter}{suffix}"
-        if not candidate.exists():
-            return candidate
-        counter += 1
-
-
-def get_trash_dir() -> Path:
-    system = platform.system().lower()
-
-    if system == "darwin":
-        return Path.home() / ".Trash"
-
-    if system == "windows":
-        return Path.home() / "Desktop" / "Digital Total Maintenance" / "Trash Review"
-
-    return Path.home() / ".local" / "share" / "Trash" / "files"
 
 
 # =============================================================================
@@ -138,14 +112,11 @@ def move_one_file(action: str, file_path: str, dtm_root: Path, mode: str) -> dic
     action_destination = unique_destination(config["target_dir"], source.name)
 
     try:
-        shutil.move(str(source), str(action_destination))
-
-        history_entry = append_action_history(
-            action=config["history_action"],
-            source_path=str(source),
-            destination_path=str(action_destination),
+        execution = execute_prepared_move(
+            source,
+            action_destination,
+            history_action=config["history_action"],
             mode=mode,
-            status="success",
         )
 
         return safe_result(
@@ -156,7 +127,7 @@ def move_one_file(action: str, file_path: str, dtm_root: Path, mode: str) -> dic
             source_path=str(source),
             destination=str(action_destination),
             destination_path=str(action_destination),
-            history_entry=history_entry,
+            history_entry=execution["history_entry"],
         )
 
     except Exception as error:
