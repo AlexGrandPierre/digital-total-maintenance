@@ -15,6 +15,10 @@
  */
 
 import type { ActionHistoryEntry } from '../domains/history/types';
+import type {
+  DatasetDecisionRecord,
+  SuspiciousDecisionRecord,
+} from '../domains/csv-review/types';
 
 export async function readActionHistory(limit = 100) {
   return window.electronAPI?.getActionHistory?.(limit);
@@ -32,5 +36,27 @@ export async function bulkRestoreHistoryEntries(entries: ActionHistoryEntry[]) {
   return window.electronAPI?.bulkRestoreFromHistory?.({
     entries,
     mode: 'bulk',
+  });
+}
+
+export async function readLegacyDatasetDecisions() {
+  return window.electronAPI?.getDatasetDecisions?.();
+}
+
+export async function loadCsvReviewSession(csvPath: string) {
+  return window.electronAPI?.loadCsvReviewSession?.({
+    csv_path: csvPath,
+  });
+}
+
+export async function saveCsvReviewSession(
+  csvPath: string,
+  duplicateDecisions: Record<string, DatasetDecisionRecord>,
+  suspiciousDecisions: Record<string, SuspiciousDecisionRecord>,
+) {
+  return window.electronAPI?.saveCsvReviewSession?.({
+    csv_path: csvPath,
+    duplicate_decisions: duplicateDecisions,
+    suspicious_decisions: suspiciousDecisions,
   });
 }

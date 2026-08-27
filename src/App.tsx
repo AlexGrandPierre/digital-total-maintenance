@@ -40,6 +40,7 @@ import SupportDrawer from './components/SupportDrawer';
 
 import { useCsvReviewIndex } from './hooks/useCsvReviewIndex';
 import { useActionHistory } from './domains/history/useActionHistory';
+import { useCsvReviewSession } from './domains/csv-review/useCsvReviewSession';
 
 import type {
   ScanPreset,
@@ -92,36 +93,6 @@ type SessionAction =
   | {
       type: 'RESET_AFTER_RESCAN';
     };
-
-type DatasetDecision =
-  | 'approved_duplicate'
-  | 'legitimate_records'
-  | 'needs_review'
-  | 'ignored'
-  | 'pending';
-
-type DatasetDecisionRecord = {
-  group_id: string;
-  decision: DatasetDecision;
-  csv_path?: string;
-  updated_at: string;
-};
-
-type SuspiciousDecision =
-  | 'pending'
-  | 'valid_data'
-  | 'corrupted'
-  | 'needs_review'
-  | 'ignored';
-
-type SuspiciousDecisionRecord = {
-  issue_id: string;
-  decision: SuspiciousDecision;
-  csv_path?: string;
-  row_number: number;
-  column: string;
-  updated_at: string;
-};
 
 type ScanProgress =
   | {
@@ -416,20 +387,6 @@ function App() {
 
   const [duplicateVisibleCount, setDuplicateVisibleCount] = useState(8);
 
-  const [datasetDecisions, setDatasetDecisions] = useState<
-    Record<string, DatasetDecisionRecord>
-  >({});
-
-  const [isCsvReviewSessionReady, setIsCsvReviewSessionReady] = useState(false);
-
-  const [busyDatasetDecisionId, setBusyDatasetDecisionId] = useState<string | null>(null);
-
-  const [suspiciousDecisions, setSuspiciousDecisions] = useState<
-    Record<string, SuspiciousDecisionRecord>
-  >({});
-
-  const [busySuspiciousDecisionId, setBusySuspiciousDecisionId] = useState<string | null>(null);
-
   const [duplicatePrimarySelections, setDuplicatePrimarySelections] = useState<Record<string, string>>({});
   const [busyDuplicateGroupId, setBusyDuplicateGroupId] = useState<string | null>(null);
 
@@ -478,12 +435,6 @@ function App() {
 
   const [selectedBatchPaths, setSelectedBatchPaths] = useState<Set<string>>(new Set());
 
-  const [csvReviewSession, setCsvReviewSession] = useState<{
-    csv_path: string;
-    session_id: string;
-    last_updated: string | null;
-  } | null>(null);
-
   const [duplicateReviewCapacity, setDuplicateReviewCapacity] =
   useState<ReviewCapacity>(25);
 
@@ -506,6 +457,32 @@ function App() {
       resetDuplicateReviewIndex,
       resetSuspiciousReviewIndex,
     } = useCsvReviewIndex();
+
+  const {
+    datasetDecisions,
+    suspiciousDecisions,
+    csvReviewSession,
+    busyDatasetDecisionId,
+    busySuspiciousDecisionId,
+    datasetDecisionSummary,
+    suspiciousReviewedCount,
+    suspiciousPendingCount,
+    suspiciousCompletionPercentage,
+    getSuspiciousIssueId,
+    loadLegacyDatasetDecisions,
+    loadCsvReviewSession,
+    handleSaveDatasetDecision,
+    handleBulkDatasetDecision,
+    handleSaveSuspiciousDecision,
+    handleBulkSuspiciousDecision,
+    handleResetDatasetDecisions,
+  } = useCsvReviewSession({
+    csvPath: csvData?.path,
+    csvReady: csvData?.success === true,
+    duplicateIndexTotal,
+    suspiciousIndexTotal,
+    onStatusChange: setActionStatus,
+  });
 
   const [duplicatePriorityFilter, setDuplicatePriorityFilter] = useState<
     'all' | 'critical' | 'high' | 'medium' | 'low'
@@ -585,14 +562,13 @@ function App() {
       
           initializeFromScan(parsed);
       
-          setIsCsvReviewSessionReady(false);
           loadCsvReviewSession(parsed.path);
           return;
         }
       
         setScanData(parsed);
         setCsvData(null);
-        loadDatasetDecisions();
+        loadLegacyDatasetDecisions();
       } catch {
         setScanData(null);
         setCsvData(null);
@@ -795,18 +771,6 @@ function App() {
   ) => {
     const preview = buildInsightPreview(sectionKind, entry, action);
     openBatchPreview(preview);
-  };
-
-  const loadDatasetDecisions = async () => {
-    try {
-      const result = await window.electronAPI?.getDatasetDecisions?.();
-  
-      if (result?.success && result.decisions) {
-        setDatasetDecisions(result.decisions);
-      }
-    } catch {
-      setDatasetDecisions({});
-    }
   };
 
   const visibleDuplicates = useMemo(() => {
@@ -1728,282 +1692,6 @@ function App() {
     }
   };
 
-  const handleSaveDatasetDecision = async (
-    groupId: string,
-    decision: DatasetDecision
-  ) => {
-    if (!csvData?.success) return;
-  
-    setBusyDatasetDecisionId(groupId);
-    setActionStatus(null);
-  
-    const record: DatasetDecisionRecord = {
-      group_id: groupId,
-      decision,
-      csv_path: csvData.path,
-      updated_at: new Date().toISOString(),
-    };
-  
-    try {
-      setDatasetDecisions((prev) => ({
-        ...prev,
-        [groupId]: record,
-      }));
-  
-      setActionStatus({
-        tone: 'success',
-        message: `Saved duplicate decision: ${decision.replace(/_/g, ' ')}`,
-      });
-    } catch (error) {
-      setActionStatus({
-        tone: 'error',
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Unexpected dataset decision failure.',
-      });
-    } finally {
-      setBusyDatasetDecisionId(null);
-    }
-  };
-
-  const handleResetDatasetDecisions = async () => {
-    if (!csvData?.path) return;
-  
-    const confirmed = window.confirm(
-      'Reset all duplicate and suspicious decisions for this dataset?'
-    );
-  
-    if (!confirmed) return;
-  
-    try {
-      const emptyDuplicateDecisions: Record<string, DatasetDecisionRecord> = {};
-      const emptySuspiciousDecisions: Record<string, SuspiciousDecisionRecord> = {};
-  
-      setDatasetDecisions(emptyDuplicateDecisions);
-      setSuspiciousDecisions(emptySuspiciousDecisions);
-  
-      resetDuplicateReviewIndex();
-      resetSuspiciousReviewIndex();
-      initializeFromScan(csvData);
-  
-      const result = await window.electronAPI?.saveCsvReviewSession?.({
-        csv_path: csvData.path,
-        duplicate_decisions: emptyDuplicateDecisions,
-        suspicious_decisions: emptySuspiciousDecisions,
-      });
-  
-      if (result?.success && result.session) {
-        setCsvReviewSession({
-          csv_path: result.session.csv_path,
-          session_id: result.session.session_id,
-          last_updated: result.session.last_updated,
-        });
-  
-        setActionStatus({
-          tone: 'success',
-          message: 'Reset duplicate and suspicious decisions for this dataset.',
-        });
-      } else {
-        setActionStatus({
-          tone: 'error',
-          message:
-            result?.message ||
-            'Failed to reset dataset decisions.',
-        });
-      }
-    } catch (error) {
-      setActionStatus({
-        tone: 'error',
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Unexpected dataset reset failure.',
-      });
-    }
-  };
-
-  const handleBulkDatasetDecision = async (decision: DatasetDecision) => {
-    if (!csvData?.success) return;
-  
-    setActionStatus(null);
-  
-    const now = new Date().toISOString();
-  
-    const records = Object.fromEntries(
-      visibleDuplicateGroupsForReview.map((group) => [
-        group.group_id,
-        {
-          group_id: group.group_id,
-          decision,
-          csv_path: csvData.path,
-          updated_at: now,
-        } satisfies DatasetDecisionRecord,
-      ])
-    );
-  
-    setDatasetDecisions((prev) => ({
-      ...prev,
-      ...records,
-    }));
-  
-    setActionStatus({
-      tone: 'success',
-      message: `Marked ${visibleDuplicateGroupsForReview.length} visible duplicate group(s) as ${decision.replace(/_/g, ' ')}.`,
-    });
-  };
-
-  const getSuspiciousIssueId = (example: {
-    issue_id?: string;
-    row_number: number;
-    column: string;
-    value?: string;
-  }) => {
-    if (example.issue_id) return example.issue_id;
-  
-    const datasetPath = csvData?.path ?? 'unknown-dataset';
-  
-    return [
-      datasetPath,
-      example.row_number,
-      example.column,
-      example.value ?? '',
-    ].join('::');
-  };
-
-  useEffect(() => {
-    if (!csvData?.success || !csvData.path || !isCsvReviewSessionReady) return;
-  
-    const timeoutId = window.setTimeout(() => {
-      window.electronAPI?.saveCsvReviewSession?.({
-        csv_path: csvData.path,
-        duplicate_decisions: datasetDecisions,
-        suspicious_decisions: suspiciousDecisions,
-      });
-    }, 500);
-  
-    return () => window.clearTimeout(timeoutId);
-  }, [csvData?.path, csvData?.success, datasetDecisions, suspiciousDecisions, isCsvReviewSessionReady]);
-
-  const handleBulkSuspiciousDecision = async (
-    decision: SuspiciousDecision
-  ) => {
-    if (!csvData?.success) return;
-  
-    setActionStatus(null);
-  
-    let successCount = 0;
-    let failureCount = 0;
-  
-    for (const example of visibleSuspiciousExamplesForReview) {
-      try {
-        const issueId = getSuspiciousIssueId(example);
-  
-        const record: SuspiciousDecisionRecord = {
-          issue_id: issueId,
-          decision,
-          csv_path: csvData.path,
-          row_number: example.row_number,
-          column: example.column,
-          updated_at: new Date().toISOString(),
-        };
-  
-        setSuspiciousDecisions((prev) => ({
-          ...prev,
-          [issueId]: record,
-        }));
-  
-        successCount += 1;
-      } catch {
-        failureCount += 1;
-      }
-    }
-  
-    setActionStatus({
-      tone: failureCount === 0 ? 'success' : 'error',
-      message:
-        failureCount === 0
-          ? `Marked ${successCount} visible suspicious value(s) as ${decision.replace(/_/g, ' ')}.`
-          : `Bulk suspicious decision finished with partial success: ${successCount} succeeded, ${failureCount} failed.`,
-    });
-  };
-
-  const loadCsvReviewSession = async (csvPath: string) => {
-    setIsCsvReviewSessionReady(false);
-  
-    try {
-      const result = await window.electronAPI?.loadCsvReviewSession?.({
-        csv_path: csvPath,
-      });
-  
-      if (result?.success && result.session) {
-        setCsvReviewSession({
-          csv_path: result.session.csv_path,
-          session_id: result.session.session_id,
-          last_updated: result.session.last_updated,
-        });
-  
-        setDatasetDecisions(
-          (result.session.duplicate_decisions ?? {}) as Record<string, DatasetDecisionRecord>
-        );
-  
-        setSuspiciousDecisions(
-          (result.session.suspicious_decisions ?? {}) as Record<string, SuspiciousDecisionRecord>
-        );
-      }
-    } catch {
-      setCsvReviewSession(null);
-    } finally {
-      setIsCsvReviewSessionReady(true);
-    }
-  };
-
-  const handleSaveSuspiciousDecision = async (
-    example: {
-      row_number: number;
-      column: string;
-    },
-    decision: SuspiciousDecision
-  ) => {
-    if (!csvData?.success) return;
-  
-    const issueId = getSuspiciousIssueId(example);
-  
-    setBusySuspiciousDecisionId(issueId);
-    setActionStatus(null);
-  
-    const record: SuspiciousDecisionRecord = {
-      issue_id: issueId,
-      decision,
-      csv_path: csvData.path,
-      row_number: example.row_number,
-      column: example.column,
-      updated_at: new Date().toISOString(),
-    };
-  
-    try {
-      setSuspiciousDecisions((prev) => ({
-        ...prev,
-        [issueId]: record,
-      }));
-  
-      setActionStatus({
-        tone: 'success',
-        message: `Saved suspicious value decision: ${decision.replace(/_/g, ' ')}`,
-      });
-    } catch (error) {
-      setActionStatus({
-        tone: 'error',
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Unexpected suspicious value decision failure.',
-      });
-    } finally {
-      setBusySuspiciousDecisionId(null);
-    }
-  };
-
   const handleOpenCsvExportFolder = async () => {
     try {
       const result = await window.electronAPI?.openCsvExportFolder?.();
@@ -2079,10 +1767,10 @@ function App() {
     });
   }, [
     loadedSuspiciousExamples,
-    csvData?.path,
     suspiciousSeverityFilter,
     suspiciousDecisionFilter,
     suspiciousDecisions,
+    getSuspiciousIssueId,
   ]);
 
   const visibleDuplicateGroupsForReview = useMemo(() => {
@@ -2093,59 +1781,6 @@ function App() {
     return filteredSuspiciousExamples;
   }, [filteredSuspiciousExamples]);
 
-  const datasetDecisionSummary = useMemo(() => {
-    const reviewed = Object.values(datasetDecisions).filter((record) => {
-      return (
-        record.csv_path === csvData?.path &&
-        record.decision !== 'pending'
-      );
-    }).length;
-  
-    return {
-      totalVisible: duplicateIndexTotal,
-      approved_duplicate: Object.values(datasetDecisions).filter(
-        (record) => record.csv_path === csvData?.path && record.decision === 'approved_duplicate'
-      ).length,
-      legitimate_records: Object.values(datasetDecisions).filter(
-        (record) => record.csv_path === csvData?.path && record.decision === 'legitimate_records'
-      ).length,
-      needs_review: Object.values(datasetDecisions).filter(
-        (record) => record.csv_path === csvData?.path && record.decision === 'needs_review'
-      ).length,
-      ignored: Object.values(datasetDecisions).filter(
-        (record) => record.csv_path === csvData?.path && record.decision === 'ignored'
-      ).length,
-      pending: Math.max(0, duplicateIndexTotal - reviewed),
-      reviewed,
-    };
-  }, [csvData?.path, duplicateIndexTotal, datasetDecisions]);
-
-  const suspiciousReviewedCount = useMemo(() => {
-    if (!csvData?.path) return 0;
-  
-    return Object.values(suspiciousDecisions).filter((record) => {
-      return (
-        record.csv_path === csvData.path &&
-        record.decision !== 'pending'
-      );
-    }).length;
-  }, [suspiciousDecisions, csvData?.path]);
-  
-  const suspiciousPendingCount = Math.max(
-    0,
-    suspiciousIndexTotal - suspiciousReviewedCount
-  );
-
-  const suspiciousCompletionPercentage =
-    suspiciousIndexTotal === 0
-      ? 0
-      : Math.min(
-          100,
-          Math.round(
-            (suspiciousReviewedCount / suspiciousIndexTotal) * 100
-          )
-        );
-  
   const [showDuplicateExportMenu, setShowDuplicateExportMenu] = useState(false);
   const [showSuspiciousExportMenu, setShowSuspiciousExportMenu] = useState(false);
 
@@ -2979,7 +2614,13 @@ function App() {
                           </span>
 
                           <button
-                            onClick={handleResetDatasetDecisions}
+                            onClick={() =>
+                              handleResetDatasetDecisions(() => {
+                                resetDuplicateReviewIndex();
+                                resetSuspiciousReviewIndex();
+                                if (csvData) initializeFromScan(csvData);
+                              })
+                            }
                             className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-rose-800 ring-1 ring-rose-200 transition hover:bg-rose-50 active:scale-[0.98]"
                           >
                             Reset decisions
@@ -3219,7 +2860,10 @@ function App() {
                                 <div className="absolute left-0 z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white shadow-lg">
                                   <button
                                     onClick={() => {
-                                      handleBulkDatasetDecision('approved_duplicate');
+                                      handleBulkDatasetDecision(
+                                        'approved_duplicate',
+                                        visibleDuplicateGroupsForReview,
+                                      );
                                       setShowDuplicateBulkMenu(false);
                                     }}
                                     className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
@@ -3229,7 +2873,10 @@ function App() {
 
                                   <button
                                     onClick={() => {
-                                      handleBulkDatasetDecision('legitimate_records');
+                                      handleBulkDatasetDecision(
+                                        'legitimate_records',
+                                        visibleDuplicateGroupsForReview,
+                                      );
                                       setShowDuplicateBulkMenu(false);
                                     }}
                                     className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
@@ -3239,7 +2886,10 @@ function App() {
 
                                   <button
                                     onClick={() => {
-                                      handleBulkDatasetDecision('needs_review');
+                                      handleBulkDatasetDecision(
+                                        'needs_review',
+                                        visibleDuplicateGroupsForReview,
+                                      );
                                       setShowDuplicateBulkMenu(false);
                                     }}
                                     className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
@@ -3249,7 +2899,10 @@ function App() {
 
                                   <button
                                     onClick={() => {
-                                      handleBulkDatasetDecision('ignored');
+                                      handleBulkDatasetDecision(
+                                        'ignored',
+                                        visibleDuplicateGroupsForReview,
+                                      );
                                       setShowDuplicateBulkMenu(false);
                                     }}
                                     className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
@@ -3639,7 +3292,10 @@ function App() {
                                 <div className="absolute left-0 z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white shadow-lg">
                                   <button
                                     onClick={() => {
-                                      handleBulkSuspiciousDecision('valid_data');
+                                      handleBulkSuspiciousDecision(
+                                        'valid_data',
+                                        visibleSuspiciousExamplesForReview,
+                                      );
                                       setShowSuspiciousBulkMenu(false);
                                     }}
                                     className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
@@ -3649,7 +3305,10 @@ function App() {
 
                                   <button
                                     onClick={() => {
-                                      handleBulkSuspiciousDecision('corrupted');
+                                      handleBulkSuspiciousDecision(
+                                        'corrupted',
+                                        visibleSuspiciousExamplesForReview,
+                                      );
                                       setShowSuspiciousBulkMenu(false);
                                     }}
                                     className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
@@ -3659,7 +3318,10 @@ function App() {
 
                                   <button
                                     onClick={() => {
-                                      handleBulkSuspiciousDecision('needs_review');
+                                      handleBulkSuspiciousDecision(
+                                        'needs_review',
+                                        visibleSuspiciousExamplesForReview,
+                                      );
                                       setShowSuspiciousBulkMenu(false);
                                     }}
                                     className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
@@ -3669,7 +3331,10 @@ function App() {
 
                                   <button
                                     onClick={() => {
-                                      handleBulkSuspiciousDecision('ignored');
+                                      handleBulkSuspiciousDecision(
+                                        'ignored',
+                                        visibleSuspiciousExamplesForReview,
+                                      );
                                       setShowSuspiciousBulkMenu(false);
                                     }}
                                     className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
