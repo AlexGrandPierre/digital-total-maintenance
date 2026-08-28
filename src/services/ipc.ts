@@ -7,6 +7,7 @@
  * - Request action-history records
  * - Request individual and bulk history restores
  * - Request local action-history clearing
+ * - Request filesystem queue actions extracted into their domain
  *
  * This module DOES NOT:
  * - Own history state or selection behavior
@@ -23,6 +24,10 @@ import type {
   ScanProgressEvent,
   ScanRequest,
 } from '../domains/scanning/types';
+import type {
+  FilesystemActionMode,
+  FilesystemActionType,
+} from '../domains/filesystem-actions/types';
 
 export async function readActionHistory(limit = 100) {
   return window.electronAPI?.getActionHistory?.(limit);
@@ -87,4 +92,31 @@ export function subscribeToScanProgress(
   callback: (data: ScanProgressEvent) => void,
 ) {
   return window.electronAPI?.onScanProgress?.(callback);
+}
+
+export async function runFilesystemAction(
+  action: FilesystemActionType,
+  filePath: string,
+  mode: FilesystemActionMode = 'single',
+) {
+  if (action === 'review') {
+    return window.electronAPI?.moveToReview?.(filePath, mode);
+  }
+
+  if (action === 'archive') {
+    return window.electronAPI?.moveToArchive?.(filePath, mode);
+  }
+
+  return window.electronAPI?.moveToTrash?.(filePath, mode);
+}
+
+export async function runBulkFilesystemAction(
+  action: FilesystemActionType,
+  paths: string[],
+) {
+  return window.electronAPI?.bulkFileAction?.({
+    action,
+    paths,
+    mode: 'bulk',
+  });
 }

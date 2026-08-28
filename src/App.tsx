@@ -18,7 +18,7 @@
  */
 
 
-import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import Header from './components/Header';
 import ScanButton from './components/ScanButton';
@@ -43,13 +43,17 @@ import { useActionHistory } from './domains/history/useActionHistory';
 import { useCsvReviewSession } from './domains/csv-review/useCsvReviewSession';
 import { useScanSession } from './domains/scanning/useScanSession';
 import type { ScanCompletion } from './domains/scanning/types';
+import { useFilesystemActionSession } from './domains/filesystem-actions/useFilesystemActionSession';
+import { useDuplicateResolution } from './domains/filesystem-actions/useDuplicateResolution';
+import {
+  isLikelyPrimaryDuplicateItem,
+  removeResolvedFiles,
+} from './domains/filesystem-actions/selectors';
 
 import type {
   SortKey,
   SortDirection,
   ClassifiedFile,
-  DuplicateGroup,
-  DuplicateGroupItem,
   ScanResult,
   CsvScanResult,
 } from './types/dtm';
@@ -61,121 +65,7 @@ type BatchPreview = {
   total: number;
 } | null;
 
-type SourceQueue = 'review' | 'archive' | 'remove' | 'duplicate';
-
-type SessionFileAction = 'keep' | 'archive' | 'remove';
-
 type InsightSectionKind = 'context_type' | 'reason';
-
-type SessionState = {
-  resolvedPaths: string[];
-  reviewResolved: number;
-  archiveResolved: number;
-  removeResolved: number;
-  duplicateGroupsResolved: number;
-  resolvedDuplicateGroupIds: string[];
-  filesArchived: number;
-  filesRemoved: number;
-  filesKept: number;
-  needsRescan: boolean;
-};
-
-type SessionAction =
-  | {
-      type: 'FILE_ACTION_SUCCEEDED';
-      sourceQueue: SourceQueue;
-      fileAction: SessionFileAction;
-      filePath: string;
-    }
-  | {
-      type: 'DUPLICATE_GROUP_RESOLVED';
-      groupId: string;
-    }
-  | {
-      type: 'RESET_AFTER_RESCAN';
-    };
-
-const initialSessionState: SessionState = {
-  resolvedPaths: [],
-  reviewResolved: 0,
-  archiveResolved: 0,
-  removeResolved: 0,
-  duplicateGroupsResolved: 0,
-  resolvedDuplicateGroupIds: [],
-  filesArchived: 0,
-  filesRemoved: 0,
-  filesKept: 0,
-  needsRescan: false,
-};
-
-function sessionReducer(state: SessionState, action: SessionAction): SessionState {
-  if (action.type === 'RESET_AFTER_RESCAN') {
-    return initialSessionState;
-  }
-
-  if (action.type === 'FILE_ACTION_SUCCEEDED') {
-    const alreadyResolved = state.resolvedPaths.includes(action.filePath);
-
-    return {
-      ...state,
-
-      resolvedPaths: alreadyResolved
-        ? state.resolvedPaths
-        : [...state.resolvedPaths, action.filePath],
-
-      reviewResolved:
-        !alreadyResolved && action.sourceQueue === 'review'
-          ? state.reviewResolved + 1
-          : state.reviewResolved,
-
-      archiveResolved:
-        !alreadyResolved && action.sourceQueue === 'archive'
-          ? state.archiveResolved + 1
-          : state.archiveResolved,
-
-      removeResolved:
-        !alreadyResolved && action.sourceQueue === 'remove'
-          ? state.removeResolved + 1
-          : state.removeResolved,
-
-      duplicateGroupsResolved:
-        !alreadyResolved && action.sourceQueue === 'duplicate'
-          ? state.duplicateGroupsResolved + 1
-          : state.duplicateGroupsResolved,
-
-      filesArchived:
-        !alreadyResolved && action.fileAction === 'archive'
-          ? state.filesArchived + 1
-          : state.filesArchived,
-
-      filesRemoved:
-        !alreadyResolved && action.fileAction === 'remove'
-          ? state.filesRemoved + 1
-          : state.filesRemoved,
-
-      filesKept:
-        !alreadyResolved && action.fileAction === 'keep'
-          ? state.filesKept + 1
-          : state.filesKept,
-
-      needsRescan: true,
-    };
-  }
-
-  if (action.type === 'DUPLICATE_GROUP_RESOLVED') {
-    const alreadyResolved = state.resolvedDuplicateGroupIds.includes(action.groupId);
-  
-    return {
-      ...state,
-      resolvedDuplicateGroupIds: alreadyResolved
-        ? state.resolvedDuplicateGroupIds
-        : [...state.resolvedDuplicateGroupIds, action.groupId],
-      needsRescan: true,
-    };
-  }
-
-  return state;
-}
 
 const confidenceRank: Record<'high' | 'medium' | 'low', number> = {
   low: 0,
@@ -258,11 +148,6 @@ function getActionForInsightLabel(label: string): InsightActionType | null {
   return null;
 }
 
-function removeResolvedFiles(items: ClassifiedFile[], resolvedPaths: string[]) {
-  const resolved = new Set(resolvedPaths);
-  return items.filter((item) => !resolved.has(item.path));
-}
-
 function getConfidenceBreakdown(items: ClassifiedFile[]) {
   const counts = {
     high: 0,
@@ -329,15 +214,29 @@ function App() {
     handleBulkRestoreSelected,
   } = useActionHistory({ onStatusChange: setActionStatus });
 
-  const [busyPath, setBusyPath] = useState<string | null>(null);
-
-  const [isBulkActing, setIsBulkActing] = useState(false);
-  const [bulkProgress, setBulkProgress] = useState<{
-    action: 'review' | 'archive' | 'remove';
-    current: number;
-    total: number;
-    currentFileName: string;
-  } | null>(null);
+  const isScanningRef = useRef(false);
+  const {
+    sessionState,
+    adjustedTotals,
+    busyPath,
+    isBulkActing,
+    bulkProgress,
+    performQueueAction,
+    withBusyPath,
+    recordSuccessfulAction,
+    recordDuplicateGroupResolved,
+    handleQueueFileAction,
+    handleBulkQueueAction,
+    resetSessionAfterRescan,
+  } = useFilesystemActionSession({
+    scanData,
+    setScanData,
+    isScanInProgress: () => isScanningRef.current,
+    refreshActionHistory,
+    onStatusChange: setActionStatus,
+  });
+  const isBulkActingRef = useRef(isBulkActing);
+  isBulkActingRef.current = isBulkActing;
 
   const [reviewSortKey, setReviewSortKey] = useState<SortKey>('review_priority');
   const [reviewSortDirection, setReviewSortDirection] = useState<SortDirection>('desc');
@@ -353,9 +252,6 @@ function App() {
   const [removeVisibleCount, setRemoveVisibleCount] = useState(8);
 
   const [duplicateVisibleCount, setDuplicateVisibleCount] = useState(8);
-
-  const [duplicatePrimarySelections, setDuplicatePrimarySelections] = useState<Record<string, string>>({});
-  const [busyDuplicateGroupId, setBusyDuplicateGroupId] = useState<string | null>(null);
 
   const [isSupportOpen, setIsSupportOpen] = useState(false);
 
@@ -394,11 +290,6 @@ function App() {
     items: ClassifiedFile[];
     total: number;
   } | null>(null);
-
-  const [sessionState, dispatchSession] = useReducer(
-    sessionReducer,
-    initialSessionState
-  );
 
   const [selectedBatchPaths, setSelectedBatchPaths] = useState<Set<string>>(new Set());
 
@@ -458,7 +349,7 @@ function App() {
     setDuplicateVisibleCount(8);
 
     refreshActionHistory();
-    dispatchSession({ type: 'RESET_AFTER_RESCAN' });
+    resetSessionAfterRescan();
 
     try {
       if (completion.kind === 'csv') {
@@ -499,13 +390,33 @@ function App() {
     handleScan,
     triggerRescan,
   } = useScanSession({
-    isBulkActing,
+    isBulkActionInProgress: () => isBulkActingRef.current,
     onStatusChange: setActionStatus,
     onScanStarted: () => {
       setScanData(null);
       setCsvData(null);
     },
     onScanCompleted: handleScanCompleted,
+  });
+  isScanningRef.current = isScanning;
+
+  const {
+    busyDuplicateGroupId,
+    getSelectedDuplicatePrimaryPath,
+    setDuplicatePrimarySelection,
+    handleArchiveDuplicate,
+    handleArchiveDuplicateGroup,
+  } = useDuplicateResolution({
+    scanData,
+    setScanData,
+    isBulkActing,
+    isScanInProgress: () => isScanningRef.current,
+    performQueueAction,
+    withBusyPath,
+    recordSuccessfulAction,
+    recordDuplicateGroupResolved,
+    refreshActionHistory,
+    onStatusChange: setActionStatus,
   });
 
   const [duplicatePriorityFilter, setDuplicatePriorityFilter] = useState<
@@ -560,26 +471,6 @@ function App() {
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, []);
-
-  useEffect(() => {
-    if (!scanData) {
-      setDuplicatePrimarySelections({});
-      return;
-    }
-
-    setDuplicatePrimarySelections((prev) => {
-      const next: Record<string, string> = {};
-
-      for (const group of scanData.duplicates) {
-        const existingSelection = prev[group.group_id];
-        if (existingSelection && group.items.some((item) => item.path === existingSelection)) {
-          next[group.group_id] = existingSelection;
-        }
-      }
-
-      return next;
-    });
-  }, [scanData]);
 
   const sortedReviewFiles = useMemo(() => {
     if (!scanData) return [];
@@ -724,357 +615,6 @@ function App() {
     });
   }, [scanData, sortedReviewFiles, sortedArchiveCandidates, sortedRemoveCandidates]);
 
-  const removePathFromQueues = (
-    filePath: string,
-  ) => {
-    setScanData((prev) => {
-      if (!prev) return prev;
-
-      const updatedGroups = prev.duplicates
-        .map((group) => ({
-          ...group,
-          items: group.items.filter((item) => item.path !== filePath),
-        }))
-        .filter((group) => group.items.length >= 2);
-
-      const next = {
-        ...prev,
-        review_files: prev.review_files.filter((f) => f.path !== filePath),
-        archive_candidates: prev.archive_candidates.filter((f) => f.path !== filePath),
-        remove_candidates: prev.remove_candidates.filter((f) => f.path !== filePath),
-        system_files: prev.system_files.filter((f) => f.path !== filePath),
-        duplicates: updatedGroups,
-        duplicates_total: updatedGroups.length,
-        review_total: prev.review_total,
-        archive_total: prev.archive_total,
-        remove_total: prev.remove_total,
-      };
-
-      return next;
-    });
-  };
-
-  const removeDuplicateFromQueue = (duplicatePath: string) => {
-    setScanData((prev) => {
-      if (!prev) return prev;
-
-      const updatedGroups = prev.duplicates
-        .map((group) => ({
-          ...group,
-          items: group.items.filter((item) => item.path !== duplicatePath),
-        }))
-        .filter((group) => group.items.length >= 2);
-
-      return {
-        ...prev,
-        duplicates: updatedGroups,
-        duplicates_total: updatedGroups.length,
-      };
-    });
-  };
-
-  const decrementInsightEntries = (
-    entries: Array<{ label: string; count: number }> = [],
-    label: string,
-    decrement: number
-  ) => {
-    return entries
-      .map((entry) => {
-        if (entry.label !== label) return entry;
-  
-        return {
-          ...entry,
-          count: Math.max(0, entry.count - decrement),
-        };
-      })
-      .filter((entry) => entry.count > 0);
-  };
-
-  const reconcileInsightsAfterSingleAction = (
-    file: ClassifiedFile,
-    actionType: 'review' | 'archive' | 'remove'
-  ) => {
-    setScanData((prev) => {
-      if (!prev?.scan_insights) return prev;
-  
-      const decrement = 1;
-  
-      const contextType = file.context_type;
-      const reason = file.reason;
-  
-      const updatedPreviews = { ...(prev.scan_insights.pattern_previews || {}) };
-  
-      const updatePatternPreview = (key: string) => {
-        const existingPreview = updatedPreviews[key];
-        if (!existingPreview) return;
-  
-        updatedPreviews[key] = {
-          ...existingPreview,
-          review: {
-            ...existingPreview.review,
-            total: Math.max(0, existingPreview.review.total - decrement),
-            items: existingPreview.review.items.filter((item) => item.path !== file.path),
-          },
-          archive: {
-            ...existingPreview.archive,
-            total:
-              actionType === 'archive'
-                ? Math.max(0, existingPreview.archive.total - decrement)
-                : existingPreview.archive.total,
-            items: existingPreview.archive.items.filter((item) => item.path !== file.path),
-          },
-          remove: {
-            ...existingPreview.remove,
-            total:
-              actionType === 'remove'
-                ? Math.max(0, existingPreview.remove.total - decrement)
-                : existingPreview.remove.total,
-            items: existingPreview.remove.items.filter((item) => item.path !== file.path),
-          },
-        };
-      };
-  
-      if (contextType) {
-        updatePatternPreview(`context_type:${contextType}`);
-      }
-  
-      if (reason) {
-        updatePatternPreview(`reason:${reason}`);
-      }
-  
-      return {
-        ...prev,
-        scan_insights: {
-          ...prev.scan_insights,
-          review_context_summary: contextType
-            ? decrementInsightEntries(
-                prev.scan_insights.review_context_summary,
-                contextType,
-                decrement
-              )
-            : prev.scan_insights.review_context_summary,
-  
-          top_review_reasons: reason
-            ? decrementInsightEntries(
-                prev.scan_insights.top_review_reasons,
-                reason,
-                decrement
-              )
-            : prev.scan_insights.top_review_reasons,
-  
-          pattern_previews: updatedPreviews,
-        },
-      };
-    });
-  };
-
-  const isLikelyPrimaryDuplicateItem = (item: DuplicateGroupItem, itemIndex: number) => {
-    return (
-      itemIndex === 0 &&
-      !item.name.toLowerCase().includes('copy') &&
-      !item.name.match(/\(\d+\)/)
-    );
-  };
-
-  const getSelectedDuplicatePrimaryPath = (group: DuplicateGroup) => {
-    const manualSelection = duplicatePrimarySelections[group.group_id];
-
-    if (manualSelection && group.items.some((item) => item.path === manualSelection)) {
-      return manualSelection;
-    }
-
-    const likelyPrimary = group.items.find((item, index) =>
-      isLikelyPrimaryDuplicateItem(item, index)
-    );
-
-    return likelyPrimary?.path || group.items[0]?.path || '';
-  };
-
-  const setDuplicatePrimarySelection = (groupId: string, filePath: string) => {
-    setDuplicatePrimarySelections((prev) => ({
-      ...prev,
-      [groupId]: filePath,
-    }));
-  };
-
-  const removeDuplicateItemsFromQueue = (duplicatePaths: string[]) => {
-    setScanData((prev) => {
-      if (!prev) return prev;
-
-      const duplicatePathSet = new Set(duplicatePaths);
-
-      const updatedGroups = prev.duplicates
-        .map((group) => ({
-          ...group,
-          items: group.items.filter((item) => !duplicatePathSet.has(item.path)),
-        }))
-        .filter((group) => group.items.length >= 2);
-
-      return {
-        ...prev,
-        duplicates: updatedGroups,
-        duplicates_total: updatedGroups.length,
-      };
-    });
-  };
-
-  const handleMoveToArchive = async (filePath: string) => {
-    if (isBulkActing) return;
-
-    setBusyPath(filePath);
-    setActionStatus(null);
-
-    try {
-      const result = await performQueueAction('archive', filePath);
-
-      setActionStatus({
-        tone: result.success ? 'success' : 'error',
-        message: result.message,
-      });
-    } catch (error) {
-      setActionStatus({
-        tone: 'error',
-        message: error instanceof Error ? error.message : 'Unexpected archive action failure.',
-      });
-    } finally {
-      setBusyPath(null);
-    }
-  };
-
-  const handleMoveToTrash = async (filePath: string) => {
-    if (isBulkActing) return;
-
-    setBusyPath(filePath);
-    setActionStatus(null);
-
-    try {
-      const result = await performQueueAction('remove', filePath);
-
-      setActionStatus({
-        tone: result.success ? 'success' : 'error',
-        message: result.message,
-      });
-    } catch (error) {
-      setActionStatus({
-        tone: 'error',
-        message: error instanceof Error ? error.message : 'Unexpected remove action failure.',
-      });
-    } finally {
-      setBusyPath(null);
-    }
-  };
-
-  const handleArchiveDuplicate = async (duplicatePath: string) => {
-    if (busyDuplicateGroupId || isBulkActing || isScanning) return;
-
-    setBusyPath(duplicatePath);
-    setActionStatus(null);
-
-    try {
-      const result = await performQueueAction('archive', duplicatePath, {
-        mode: 'single',
-      });
-
-      if (result.success) {
-        removeDuplicateFromQueue(duplicatePath);
-        await refreshActionHistory();
-
-        setActionStatus({
-          tone: 'success',
-          message: `${result.message} Refresh scan when you want to reconcile duplicate groups.`,
-        });
-
-        dispatchSession({
-          type: 'FILE_ACTION_SUCCEEDED',
-          sourceQueue: 'duplicate',
-          fileAction: 'archive',
-          filePath: duplicatePath,
-        });
-      } else {
-        setActionStatus({
-          tone: 'error',
-          message: result.message,
-        });
-      }
-    } catch (error) {
-      setActionStatus({
-        tone: 'error',
-        message: error instanceof Error ? error.message : 'Unexpected duplicate archive failure.',
-      });
-    } finally {
-      setBusyPath(null);
-    }
-  };
-
-  const handleArchiveDuplicateGroup = async (group: DuplicateGroup) => {
-    if (isBulkActing || isScanning || busyDuplicateGroupId) {
-      return;
-    }
-
-    const keepPath = getSelectedDuplicatePrimaryPath(group);
-    const itemsToArchive = group.items.filter((item) => item.path !== keepPath);
-
-    if (!keepPath || itemsToArchive.length === 0) {
-      return;
-    }
-
-    setBusyDuplicateGroupId(group.group_id);
-    setActionStatus(null);
-
-    let successCount = 0;
-    let failureCount = 0;
-    const archivedPaths: string[] = [];
-
-    for (const item of itemsToArchive) {
-      try {
-        const result = await performQueueAction('archive', item.path, {
-          mode: 'single'
-        });
-
-        if (result.success) {
-          successCount += 1;
-          archivedPaths.push(item.path);
-        
-          dispatchSession({
-            type: 'FILE_ACTION_SUCCEEDED',
-            sourceQueue: 'duplicate',
-            fileAction: 'archive',
-            filePath: item.path,
-          });
-        } else {
-          failureCount += 1;
-        }
-      } catch {
-        failureCount += 1;
-      }
-    }
-
-    if (archivedPaths.length > 0) {
-      removeDuplicateItemsFromQueue(archivedPaths);
-    
-      dispatchSession({
-        type: 'DUPLICATE_GROUP_RESOLVED',
-        groupId: group.group_id,
-      });
-    
-      await refreshActionHistory();
-    }
-
-    if (failureCount === 0) {
-      setActionStatus({
-        tone: 'success',
-        message: `Archived ${successCount} duplicate copie${successCount === 1 ? 'y' : 's'} while keeping the selected primary file.`,
-      });
-    } else {
-      setActionStatus({
-        tone: 'error',
-        message: `Duplicate group resolution finished with partial success: ${successCount} archived, ${failureCount} failed.`,
-      });
-    }
-
-    setBusyDuplicateGroupId(null);
-  };
-
   const insights = useMemo(() => {
     if (!scanData) return null;
   
@@ -1170,196 +710,12 @@ function App() {
     return getRiskSummary(batchPreview.items);
   }, [batchPreview]);
 
-  const adjustedTotals = useMemo(() => {
-    if (!scanData) {
-      return {
-        totalFiles: 0,
-        review: 0,
-        archive: 0,
-        remove: 0,
-        duplicateGroups: 0,
-        sessionActions: 0,
-      };
-    }
-  
-    const sessionActions =
-      sessionState.filesArchived +
-      sessionState.filesRemoved +
-      sessionState.filesKept;
-  
-    return {
-      totalFiles: Math.max(
-        0,
-        scanData.total_files -
-          sessionState.filesArchived -
-          sessionState.filesRemoved
-      ),
-  
-      review: Math.max(0, scanData.review_total - sessionState.reviewResolved),
-      archive: Math.max(0, scanData.archive_total - sessionState.archiveResolved),
-      remove: Math.max(0, scanData.remove_total - sessionState.removeResolved),
-  
-      duplicateGroups: Math.max(
-        0,
-        scanData.duplicates_total - sessionState.resolvedDuplicateGroupIds.length
-      ),
-      sessionActions,
-    };
-  }, [scanData, sessionState]);
-
   const getFilterMatchCount = (filter: Exclude<QueueFilter, null>) => {
     return (
       applyQueueFilter(sortedReviewFiles, filter).length +
       applyQueueFilter(sortedArchiveCandidates, filter).length +
       applyQueueFilter(sortedRemoveCandidates, filter).length
     );
-  };
-
-  const invokeAction = async (
-    actionType: 'review' | 'archive' | 'remove',
-    filePath: string,
-    mode: 'single' | 'bulk' = 'single'
-  ) => {
-    if (actionType === 'review') {
-      return await window.electronAPI?.moveToReview?.(filePath, mode);
-    }
-
-    if (actionType === 'archive') {
-      return await window.electronAPI?.moveToArchive?.(filePath, mode);
-    }
-
-    return await window.electronAPI?.moveToTrash?.(filePath, mode);
-  };
-
-  const getSuccessMessage = (
-    actionType: 'review' | 'archive' | 'remove',
-    result: { destination?: string; message?: string }
-  ) => {
-    if (result.destination) {
-      if (actionType === 'review') {
-        return `Moved to DTM Review: ${result.destination}`;
-      }
-
-      if (actionType === 'archive') {
-        return `Moved to DTM Archive: ${result.destination}`;
-      }
-
-      return `Moved to Trash: ${result.destination}`;
-    }
-
-    return result.message || 'Action completed successfully.';
-  };
-
-  const performQueueAction = async (
-    actionType: 'review' | 'archive' | 'remove',
-    filePath: string,
-    options?: {mode?: 'single' | 'bulk' }
-  ) => {
-    const mode = options?.mode ?? 'single';
-
-    const result = await invokeAction(actionType, filePath, mode);
-
-    if (result?.success) {
-      removePathFromQueues(filePath);
-    
-      await refreshActionHistory();
-    
-      return {
-        success: true,
-        message: getSuccessMessage(actionType, result),
-      };
-    }
-
-    return {
-      success: false,
-      message:
-        result?.message ||
-        (actionType === 'review'
-          ? 'Failed to move file to DTM Review.'
-          : actionType === 'archive'
-          ? 'Failed to move file to DTM Archive.'
-          : 'Failed to move file to Trash.'),
-    };
-  };
-
-  const handleBulkQueueAction = async (
-    sourceQueue: SourceQueue,
-    actionType: 'review' | 'archive' | 'remove',
-    files: ClassifiedFile[]
-  ) => {
-    if (isBulkActing || isScanning || files.length === 0) {
-      return;
-    }
-  
-    setIsBulkActing(true);
-    setBusyPath(null);
-    setActionStatus(null);
-  
-    try {
-      setBulkProgress({
-        action: actionType,
-        current: 1,
-        total: files.length,
-        currentFileName: `Processing ${files.length} files...`,
-      });
-  
-      const result = await window.electronAPI?.bulkFileAction?.({
-        action: actionType,
-        paths: files.map((file) => file.path),
-        mode: 'bulk',
-      });
-  
-      const successCount = result?.success_count ?? 0;
-      const failureCount = result?.failure_count ?? files.length;
-  
-      if (Array.isArray(result?.results)) {
-        for (const item of result.results) {
-          if (!item.success) continue;
-  
-          removePathFromQueues(item.source_path);
-  
-          dispatchSession({
-            type: 'FILE_ACTION_SUCCEEDED',
-            sourceQueue,
-            fileAction:
-              actionType === 'archive'
-                ? 'archive'
-                : actionType === 'remove'
-                ? 'remove'
-                : 'keep',
-            filePath: item.source_path,
-          });
-        }
-      }
-  
-      await refreshActionHistory();
-  
-      const actionLabel =
-        actionType === 'review'
-          ? 'sent to review'
-          : actionType === 'archive'
-          ? 'archived'
-          : 'moved to Trash';
-  
-      setActionStatus({
-        tone: failureCount === 0 ? 'success' : 'error',
-        message:
-          failureCount === 0
-            ? `Action complete: ${successCount} visible file${successCount === 1 ? '' : 's'} ${actionLabel}. Refresh when ready to reconcile.`
-            : `Bulk action finished with partial success: ${successCount} succeeded, ${failureCount} failed.`,
-      });
-    } catch (error) {
-      setActionStatus({
-        tone: 'error',
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Unexpected bulk action failure.',
-      });
-    } finally {
-      setBulkProgress(null);
-      setIsBulkActing(false);
-    }
   };
 
   const handleBulkArchiveFromReview = async () => {
@@ -1372,15 +728,6 @@ function App() {
   
   const handleBulkMoveToTrash = async () => {
     await handleBulkQueueAction('remove', 'remove', visibleRemoveCandidates);
-  };
-
-  const handleKeepFile = async (filePath: string) => {
-    removePathFromQueues(filePath);
-  
-    setActionStatus({
-      tone: 'success',
-      message: 'Kept file in place. Refresh scan when you want to reconcile results.',
-    });
   };
 
   const handleExecutePreview = async () => {
@@ -3810,7 +3157,7 @@ function App() {
 
                       <button
                         onClick={() => {
-                          dispatchSession({ type: 'RESET_AFTER_RESCAN' });
+                          resetSessionAfterRescan();
                           triggerRescan();
                         }}
                         className="rounded-full bg-emerald-900 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
@@ -3909,44 +3256,17 @@ function App() {
                                 tone="review"
                                 actionLabel="Archive"
                                 busyLabel="Archiving…"
-                                onAction={async (filePath) => {
-                                  await handleMoveToArchive(filePath);
+                                onAction={() =>
+                                  handleQueueFileAction(file, 'review', 'archive')
+                                }
                                 
-                                  dispatchSession({
-                                    type: 'FILE_ACTION_SUCCEEDED',
-                                    sourceQueue: 'review',
-                                    fileAction: 'archive',
-                                    filePath,
-                                  });
+                                onKeep={() =>
+                                  handleQueueFileAction(file, 'review', 'keep')
+                                }
                                 
-                                  reconcileInsightsAfterSingleAction(file, 'archive');
-                                }}
-                                
-                                onKeep={async (filePath) => {
-                                  await handleKeepFile(filePath);
-                                
-                                  dispatchSession({
-                                    type: 'FILE_ACTION_SUCCEEDED',
-                                    sourceQueue: 'review',
-                                    fileAction: 'keep',
-                                    filePath,
-                                  });
-                                
-                                  reconcileInsightsAfterSingleAction(file, 'review');
-                                }}
-                                
-                                onRemove={async (filePath) => {
-                                  await handleMoveToTrash(filePath);
-                                
-                                  dispatchSession({
-                                    type: 'FILE_ACTION_SUCCEEDED',
-                                    sourceQueue: 'review',
-                                    fileAction: 'remove',
-                                    filePath,
-                                  });
-                                
-                                  reconcileInsightsAfterSingleAction(file, 'remove');
-                                }}
+                                onRemove={() =>
+                                  handleQueueFileAction(file, 'review', 'remove')
+                                }
                                 recommendedAction="archive"
                                 isBusy={busyPath === file.path || isBulkActing}
                               />
@@ -4043,44 +3363,17 @@ function App() {
                                 tone="archive"
                                 actionLabel="Move to Archive"
                                 busyLabel="Archiving…"
-                                onAction={async (filePath) => {
-                                  await handleMoveToArchive(filePath);
+                                onAction={() =>
+                                  handleQueueFileAction(file, 'archive', 'archive')
+                                }
                                 
-                                  dispatchSession({
-                                    type: 'FILE_ACTION_SUCCEEDED',
-                                    sourceQueue: 'archive',
-                                    fileAction: 'archive',
-                                    filePath,
-                                  });
+                                onKeep={() =>
+                                  handleQueueFileAction(file, 'archive', 'keep')
+                                }
                                 
-                                  reconcileInsightsAfterSingleAction(file, 'archive');
-                                }}
-                                
-                                onKeep={async (filePath) => {
-                                  await handleKeepFile(filePath);
-                                
-                                  dispatchSession({
-                                    type: 'FILE_ACTION_SUCCEEDED',
-                                    sourceQueue: 'archive',
-                                    fileAction: 'keep',
-                                    filePath,
-                                  });
-                                
-                                  reconcileInsightsAfterSingleAction(file, 'review');
-                                }}
-                                
-                                onRemove={async (filePath) => {
-                                  await handleMoveToTrash(filePath);
-                                
-                                  dispatchSession({
-                                    type: 'FILE_ACTION_SUCCEEDED',
-                                    sourceQueue: 'archive',
-                                    fileAction: 'remove',
-                                    filePath,
-                                  });
-                                
-                                  reconcileInsightsAfterSingleAction(file, 'remove');
-                                }}
+                                onRemove={() =>
+                                  handleQueueFileAction(file, 'archive', 'remove')
+                                }
                                 recommendedAction="archive"
                                 isBusy={busyPath === file.path || isBulkActing}
                               />
@@ -4177,44 +3470,17 @@ function App() {
                                 tone="remove"
                                 actionLabel="Move to Trash"
                                 busyLabel="Removing…"
-                                onAction={async (filePath) => {
-                                  await handleMoveToTrash(filePath);
+                                onAction={() =>
+                                  handleQueueFileAction(file, 'remove', 'remove')
+                                }
                                 
-                                  dispatchSession({
-                                    type: 'FILE_ACTION_SUCCEEDED',
-                                    sourceQueue: 'remove',
-                                    fileAction: 'remove',
-                                    filePath,
-                                  });
+                                onKeep={() =>
+                                  handleQueueFileAction(file, 'remove', 'keep')
+                                }
                                 
-                                  reconcileInsightsAfterSingleAction(file, 'remove');
-                                }}
-                                
-                                onKeep={async (filePath) => {
-                                  await handleKeepFile(filePath);
-                                
-                                  dispatchSession({
-                                    type: 'FILE_ACTION_SUCCEEDED',
-                                    sourceQueue: 'remove',
-                                    fileAction: 'keep',
-                                    filePath,
-                                  });
-                                
-                                  reconcileInsightsAfterSingleAction(file, 'review');
-                                }}
-                                
-                                onArchive={async (filePath) => {
-                                  await handleMoveToArchive(filePath);
-                                
-                                  dispatchSession({
-                                    type: 'FILE_ACTION_SUCCEEDED',
-                                    sourceQueue: 'remove',
-                                    fileAction: 'archive',
-                                    filePath,
-                                  });
-                                
-                                  reconcileInsightsAfterSingleAction(file, 'archive');
-                                }}
+                                onArchive={() =>
+                                  handleQueueFileAction(file, 'remove', 'archive')
+                                }
                                 recommendedAction="remove"
                                 isBusy={busyPath === file.path || isBulkActing}
                               />

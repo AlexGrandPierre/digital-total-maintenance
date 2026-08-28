@@ -34,14 +34,14 @@ import {
 import type { ScanCompletion, ScanProgress, ScanStatus } from './types';
 
 type UseScanSessionOptions = {
-  isBulkActing: boolean;
+  isBulkActionInProgress: () => boolean;
   onStatusChange: (status: ScanStatus | null) => void;
   onScanStarted: () => void;
   onScanCompleted: (completion: ScanCompletion) => void;
 };
 
 export function useScanSession({
-  isBulkActing,
+  isBulkActionInProgress,
   onStatusChange,
   onScanStarted,
   onScanCompleted,
@@ -118,7 +118,7 @@ export function useScanSession({
   }, [onStatusChange]);
 
   const handleScan = useCallback(() => {
-    if (isBulkActing) {
+    if (isBulkActionInProgress()) {
       onStatusChange({
         tone: 'error',
         message:
@@ -172,7 +172,7 @@ export function useScanSession({
   }, [
     csvPath,
     customPath,
-    isBulkActing,
+    isBulkActionInProgress,
     onScanStarted,
     onStatusChange,
     scanPreset,
